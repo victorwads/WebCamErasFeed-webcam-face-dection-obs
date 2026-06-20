@@ -1,0 +1,27 @@
+name: CameraDirector
+options:
+  bundleIdPrefix: com.victorwads
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    PRODUCT_NAME: CameraDirector
+    SWIFT_VERSION: "5.10"
+    GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  CameraDirector:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.victorwads.CameraDirector
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_KEY_CFBundleDisplayName: CameraDirector
+        INFOPLIST_KEY_NSCameraUsageDescription: CameraDirector captures still frames from RTSP streams.
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
+    scheme:
+      testTargets: []
