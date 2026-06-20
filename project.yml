@@ -22,6 +22,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_KEY_CFBundleDisplayName: CameraDirector
         INFOPLIST_KEY_NSCameraUsageDescription: CameraDirector needs camera access to capture frames from local webcams for monitoring and face detection.
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads: YES
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
     scheme:
       testTargets:

@@ -11,8 +11,8 @@ struct CameraDefinitionRow: View {
             )
 
             DSStatusBadge(
-                title: camera.sourceType == .networkStream ? "RTSP Source" : "Local Camera",
-                color: camera.sourceType == .networkStream ? .blue : .teal
+                title: camera.providerType == .ffmpeg ? "RTSP Source" : camera.providerType == .webView ? "WebView Source" : "Local Camera",
+                color: camera.providerType == .ffmpeg ? .blue : camera.providerType == .webView ? .indigo : .teal
             )
 
             if !camera.trimmedSceneName.isEmpty {

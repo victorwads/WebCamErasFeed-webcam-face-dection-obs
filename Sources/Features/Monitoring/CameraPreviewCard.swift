@@ -66,8 +66,11 @@ struct CameraPreviewCard: View {
                 FaceDetectionDetailsView(result: runtimeState.detectionResult)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Source: \(camera.sourceSummary)")
+                    Text("Provider: \(camera.sourceSummary)")
                     Text("Session: \(runtimeState.sessionModeLabel ?? "Unknown")")
+                    if let providerState = runtimeState.providerState?.rawValue {
+                        Text("Provider state: \(providerState)")
+                    }
                     if let fps = runtimeState.configuredFPS {
                         Text("Configured rate: \(fps.formattedFPS)")
                     }
@@ -94,6 +97,23 @@ struct CameraPreviewCard: View {
                     if let diagnosticMessage = runtimeState.diagnosticMessage {
                         Text("Diagnostic: \(diagnosticMessage)")
                     }
+                    if let navigationStatus = runtimeState.webViewNavigationStatus {
+                        Text("WebView: \(navigationStatus)")
+                    }
+                    if let windowStatus = runtimeState.webViewWindowStatus {
+                        Text("Window: \(windowStatus)")
+                    }
+                    if let captureStatus = runtimeState.screenCaptureStatus {
+                        Text("ScreenCapture: \(captureStatus)")
+                    }
+                    if let loadedURL = runtimeState.loadedURL {
+                        Text("Loaded URL: \(loadedURL)")
+                            .lineLimit(2)
+                    }
+                    if runtimeState.screenCapturePermissionDenied {
+                        Text("Grant Screen Recording permission in System Settings > Privacy & Security > Screen Recording.")
+                            .foregroundStyle(.orange)
+                    }
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -114,6 +134,12 @@ struct CameraPreviewCard: View {
                     Button("Switch OBS to This Scene") {
                         onSwitchScene()
                     }
+                }
+
+                if camera.providerType == .webView {
+                    Text("Use the Settings tab to bring the WebView window to the front or reload the stream.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

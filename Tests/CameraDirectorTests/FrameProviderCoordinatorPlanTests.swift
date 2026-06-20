@@ -1,8 +1,8 @@
 import XCTest
 @testable import CameraDirector
 
-final class FrameCaptureCoordinatorPlanTests: XCTestCase {
-    func testPlanKeepsUnchangedSessionsAndRestartsChangedOnes() {
+final class FrameProviderCoordinatorPlanTests: XCTestCase {
+    func testPlanKeepsUnchangedProvidersAndRestartsChangedOnes() {
         let id1 = UUID()
         let id2 = UUID()
         let old = [
@@ -14,7 +14,7 @@ final class FrameCaptureCoordinatorPlanTests: XCTestCase {
             id2: makeSignature(id: id2, fps: 2)
         ]
 
-        let plan = FrameCaptureCoordinator.makePlan(existing: old, desired: desired)
+        let plan = FrameProviderCoordinator.makePlan(existing: old, desired: desired)
 
         XCTAssertEqual(plan.keep, [id1])
         XCTAssertEqual(plan.start, [id2])
@@ -24,13 +24,15 @@ final class FrameCaptureCoordinatorPlanTests: XCTestCase {
     private func makeSignature(id: UUID, fps: Double) -> CameraConfigurationSignature {
         CameraConfigurationSignature(
             id: id,
-            sourceType: .networkStream,
+            providerType: .ffmpeg,
             streamURL: "rtsp://127.0.0.1:8554/camera_c300",
             localDeviceUniqueID: nil,
             isEnabled: true,
             captureFPS: fps,
             frameWidth: 640,
-            frameHeight: 360
+            frameHeight: 360,
+            webViewWidth: 1280,
+            webViewHeight: 720
         )
     }
 }

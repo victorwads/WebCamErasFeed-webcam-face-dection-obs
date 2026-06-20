@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
     private let preferencesStore: PreferencesStore
     private let cameraDefinitionsStore: CameraDefinitionsStore
     private let localCameraDeviceProvider: LocalCameraDeviceProvider
+    @MainActor private let webViewWindowManager: WebViewWindowManager
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
@@ -16,11 +17,20 @@ final class AppState: ObservableObject {
     ) {
         let obsClient = OBSClient()
         let localCameraDeviceProvider = LocalCameraDeviceProvider()
+        let webViewWindowManager = WebViewWindowManager()
+        let frameProviderCoordinator = FrameProviderCoordinator(
+            providerFactory: FrameProviderFactory(
+                ffmpegLocator: FFmpegLocator(),
+                localCameraDeviceProvider: localCameraDeviceProvider,
+                webViewWindowManager: webViewWindowManager
+            )
+        )
 
         self.preferencesStore = preferencesStore
         self.cameraDefinitionsStore = cameraDefinitionsStore
         self.obsClient = obsClient
         self.localCameraDeviceProvider = localCameraDeviceProvider
+        self.webViewWindowManager = webViewWindowManager
 
         let storedPreferences = preferencesStore.load()
         let storedCameras = cameraDefinitionsStore.load()
@@ -28,11 +38,12 @@ final class AppState: ObservableObject {
         let settingsViewModel = SettingsViewModel(
             cameras: storedCameras,
             preferences: storedPreferences,
-            localCameraDeviceProvider: localCameraDeviceProvider
+            localCameraDeviceProvider: localCameraDeviceProvider,
+            webViewWindowManager: webViewWindowManager
         )
         let monitoringViewModel = MonitoringViewModel(
             obsClient: obsClient,
-            localCameraDeviceProvider: localCameraDeviceProvider
+            frameProviderCoordinator: frameProviderCoordinator
         )
 
         self.settingsViewModel = settingsViewModel
@@ -42,8 +53,10 @@ final class AppState: ObservableObject {
             await self?.apply(cameras: cameras, preferences: preferences)
         }
 
-        Task {
-            await apply(cameras: storedCameras, preferences: storedPreferences)
+        if !ProcessInfo.processInfo.isRunningTests {
+            Task {
+                await apply(cameras: storedCameras, preferences: storedPreferences)
+            }
         }
     }
 
@@ -68,5 +81,11 @@ final class AppState: ObservableObject {
         Task {
             await obsClient.refreshSceneList()
         }
+    }
+}
+
+private extension ProcessInfo {
+    var isRunningTests: Bool {
+        environment["XCTestConfigurationFilePath"] != nil
     }
 }

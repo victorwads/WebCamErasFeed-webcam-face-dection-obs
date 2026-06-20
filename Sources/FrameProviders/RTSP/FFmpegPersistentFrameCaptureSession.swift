@@ -1,8 +1,9 @@
 import Darwin
 import Foundation
 
-actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
-    nonisolated let cameraID: UUID
+actor FFmpegPersistentFrameCaptureSession: FrameProvider {
+    nonisolated let id: UUID
+    let configuration: CameraDefinition
 
     private let source: FrameSource
     private let ffmpegPath: String
@@ -18,7 +19,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
     private var reconnectTask: Task<Void, Never>?
     private var parser: RawVideoFrameParser
     private var desiredRunning = false
-    private var sessionState: CaptureSessionState
+    private var providerStatus: FrameProviderStatus
     private var lastFrameAt: Date?
     private var frameSequence: UInt64 = 0
     private var consecutiveReconnectAttempts = 0
@@ -28,14 +29,17 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
     private var stderrLines: [String] = []
 
     init(source: FrameSource, ffmpegPath: String) {
-        self.cameraID = source.camera.id
+        self.id = source.camera.id
+        self.configuration = source.camera
         self.source = source
         self.ffmpegPath = ffmpegPath
         self.parser = RawVideoFrameParser(frameSize: source.frameWidth * source.frameHeight * 4)
-        self.sessionState = CaptureSessionState.inactive(
-            cameraID: source.camera.id,
+        self.providerStatus = FrameProviderStatus.inactive(
+            sourceID: source.camera.id,
+            providerType: .ffmpeg,
             configuredFPS: source.configuredFPS,
-            sessionModeLabel: "FFmpeg RTSP"
+            sessionModeLabel: "FFmpeg RTSP",
+            state: .idle
         )
     }
 
@@ -61,17 +65,26 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
         stderrLines.removeAll()
     }
 
+    func getSnapshot() async throws -> CapturedFrame {
+        if let frame = await frameStore.current() {
+            return frame
+        }
+
+        throw FrameProviderError.frameUnavailable
+    }
+
     func latestFrame() async -> CapturedFrame? {
         await frameStore.current()
     }
 
-    func state() async -> CaptureSessionState {
-        sessionState
+    func getStatus() async -> FrameProviderStatus {
+        providerStatus
     }
 
     private func launchProcess(preferVideoToolbox: Bool, isRetry: Bool) async throws {
         guard desiredRunning else { return }
         guard processResources == nil else { return }
+        await resumeFirstFrameContinuation(with: SessionStopError.cancelled)
 
         currentGeneration += 1
         parser.reset()
@@ -96,38 +109,46 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
             }
         }
 
-        sessionState = CaptureSessionState(
-            cameraID: cameraID,
-            status: .starting,
-            lastErrorMessage: nil,
+        providerStatus = FrameProviderStatus(
+            sourceID: id,
+            providerType: .ffmpeg,
+            state: .starting,
             lastFrameAt: lastFrameAt,
             lastFrameSequence: frameSequence == 0 ? nil : frameSequence,
-            isActive: false,
-            isReconnecting: false,
+            lastError: nil,
             restartCount: restartCount,
             configuredFPS: source.configuredFPS,
+            isActive: false,
+            isReconnecting: false,
             sessionModeLabel: "FFmpeg RTSP",
             usingVideoToolbox: preferVideoToolbox,
             isUsingVideoToolboxFallback: !preferVideoToolbox,
             processIdentifier: nil,
-            diagnosticMessage: "Starting persistent FFmpeg session"
+            diagnosticMessage: "Starting persistent FFmpeg session",
+            webViewNavigationStatus: nil,
+            webViewWindowStatus: nil,
+            screenCaptureStatus: nil,
+            loadedURL: nil,
+            windowTitle: nil,
+            screenCapturePermissionDenied: false
         )
 
         do {
             try process.run()
         } catch {
             if preferVideoToolbox {
-                AppLog.ffmpeg.warning("Failed to start FFmpeg with VideoToolbox for camera \(self.cameraID.uuidString, privacy: .public). Retrying without hardware decoding.")
+                AppLog.ffmpeg.warning("Failed to start FFmpeg with VideoToolbox for source \(self.id.uuidString, privacy: .public). Retrying without hardware decoding.")
                 try await launchProcess(preferVideoToolbox: false, isRetry: true)
                 return
             }
 
-            sessionState = CaptureSessionState.inactive(
-                cameraID: cameraID,
+            providerStatus = FrameProviderStatus.inactive(
+                sourceID: id,
+                providerType: .ffmpeg,
                 configuredFPS: source.configuredFPS,
                 sessionModeLabel: "FFmpeg RTSP",
                 error: error.localizedDescription,
-                status: .error
+                state: .failed
             )
             throw error
         }
@@ -139,23 +160,30 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
         )
         processResources = resources
 
-        AppLog.ffmpeg.info("Started FFmpeg PID \(process.processIdentifier, privacy: .public) for camera \(self.cameraID.uuidString, privacy: .public), hardware decode: \(preferVideoToolbox, privacy: .public)")
+        AppLog.ffmpeg.info("Started FFmpeg PID \(process.processIdentifier, privacy: .public) for source \(self.id.uuidString, privacy: .public), hardware decode: \(preferVideoToolbox, privacy: .public)")
 
-        sessionState = CaptureSessionState(
-            cameraID: cameraID,
-            status: .capturing,
-            lastErrorMessage: nil,
+        providerStatus = FrameProviderStatus(
+            sourceID: id,
+            providerType: .ffmpeg,
+            state: .waitingForFrame,
             lastFrameAt: lastFrameAt,
             lastFrameSequence: frameSequence == 0 ? nil : frameSequence,
-            isActive: true,
-            isReconnecting: false,
+            lastError: nil,
             restartCount: restartCount,
             configuredFPS: source.configuredFPS,
+            isActive: true,
+            isReconnecting: false,
             sessionModeLabel: "FFmpeg RTSP",
             usingVideoToolbox: preferVideoToolbox,
             isUsingVideoToolboxFallback: !preferVideoToolbox,
             processIdentifier: process.processIdentifier,
-            diagnosticMessage: "Connected and reading raw BGRA frames"
+            diagnosticMessage: "Connected and reading raw BGRA frames",
+            webViewNavigationStatus: nil,
+            webViewWindowStatus: nil,
+            screenCaptureStatus: nil,
+            loadedURL: nil,
+            windowTitle: nil,
+            screenCapturePermissionDenied: false
         )
 
         stdoutTask = makeStdoutTask(resources: resources, generation: generation)
@@ -166,22 +194,23 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
             try await waitForFirstFrame()
             consecutiveReconnectAttempts = 0
             if isRetry {
-                AppLog.ffmpeg.notice("FFmpeg fallback without VideoToolbox succeeded for camera \(self.cameraID.uuidString, privacy: .public)")
+                AppLog.ffmpeg.notice("FFmpeg fallback without VideoToolbox succeeded for source \(self.id.uuidString, privacy: .public)")
             }
         } catch {
             await stopCurrentProcess(markAsStopped: false)
             if preferVideoToolbox {
-                AppLog.ffmpeg.warning("FFmpeg did not yield frames with VideoToolbox for camera \(self.cameraID.uuidString, privacy: .public). Retrying without hardware decoding.")
+                AppLog.ffmpeg.warning("FFmpeg did not yield frames with VideoToolbox for source \(self.id.uuidString, privacy: .public). Retrying without hardware decoding.")
                 try await launchProcess(preferVideoToolbox: false, isRetry: true)
                 return
             }
 
-            sessionState = CaptureSessionState.inactive(
-                cameraID: cameraID,
+            providerStatus = FrameProviderStatus.inactive(
+                sourceID: id,
+                providerType: .ffmpeg,
                 configuredFPS: source.configuredFPS,
                 sessionModeLabel: "FFmpeg RTSP",
                 error: error.localizedDescription,
-                status: .error
+                state: .failed
             )
             throw error
         }
@@ -244,7 +273,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
     }
 
     private func makeStderrTask(resources: FFmpegProcessResources, generation: Int) -> Task<Void, Never> {
-        return Task.detached(priority: .utility) { [weak self] in
+        Task.detached(priority: .utility) { [weak self] in
             do {
                 while !Task.isCancelled {
                     guard let chunk = try resources.stderrHandle.read(upToCount: 4096), !chunk.isEmpty else {
@@ -261,7 +290,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
     }
 
     private func makeWatchdogTask(generation: Int) -> Task<Void, Never> {
-        return Task { [weak self] in
+        Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 await self?.checkForStall(generation: generation)
@@ -288,23 +317,25 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
                 lastFrameAt = capturedAt
 
                 let frame = CapturedFrame(
+                    sourceID: id,
+                    providerType: .ffmpeg,
                     image: cgImage,
                     capturedAt: capturedAt,
-                    sourceFrameSequence: frameSequence,
+                    sequence: frameSequence,
                     pixelSize: CGSize(width: source.frameWidth, height: source.frameHeight)
                 )
                 await frameStore.replace(with: frame)
             } catch {
-                sessionState = updatedState(
-                    status: .error,
+                providerStatus = updatedStatus(
+                    state: .failed,
                     error: error.localizedDescription,
                     diagnostic: "Failed to decode BGRA frame"
                 )
             }
         }
 
-        sessionState = updatedState(
-            status: .capturing,
+        providerStatus = updatedStatus(
+            state: .running,
             error: nil,
             diagnostic: "Receiving persistent FFmpeg frames"
         )
@@ -330,13 +361,13 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
 
     private func handleReadFailure(_ error: Error, generation: Int) async {
         guard generation == currentGeneration else { return }
-        AppLog.ffmpeg.error("stdout read failed for camera \(self.cameraID.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        AppLog.ffmpeg.error("stdout read failed for source \(self.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
         await scheduleReconnect(reason: "Read failure: \(error.localizedDescription)")
     }
 
     private func handleTermination(generation: Int, status: Int32) async {
         guard generation == currentGeneration else { return }
-        AppLog.ffmpeg.warning("FFmpeg PID \(self.processResources?.process.processIdentifier ?? 0, privacy: .public) terminated for camera \(self.cameraID.uuidString, privacy: .public) with status \(status, privacy: .public)")
+        AppLog.ffmpeg.warning("FFmpeg PID \(self.processResources?.process.processIdentifier ?? 0, privacy: .public) terminated for source \(self.id.uuidString, privacy: .public) with status \(status, privacy: .public)")
         await scheduleReconnect(reason: "FFmpeg exited with status \(status)")
     }
 
@@ -348,7 +379,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
 
         let age = Date().timeIntervalSince(lastFrameAt)
         if age >= stallTimeout {
-            AppLog.ffmpeg.warning("No frames received for \(age, privacy: .public)s on camera \(self.cameraID.uuidString, privacy: .public); restarting session.")
+            AppLog.ffmpeg.warning("No frames received for \(age, privacy: .public)s on source \(self.id.uuidString, privacy: .public); restarting session.")
             await scheduleReconnect(reason: "No new frames for \(Int(age)) seconds")
         }
     }
@@ -360,8 +391,8 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
         consecutiveReconnectAttempts += 1
         let delay = ReconnectBackoffSequence.delay(forAttempt: consecutiveReconnectAttempts)
 
-        sessionState = updatedState(
-            status: .reconnecting,
+        providerStatus = updatedStatus(
+            state: .reconnecting,
             error: reason,
             diagnostic: "Reconnecting in \(delay.formattedAge)"
         )
@@ -381,11 +412,11 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
 
         do {
             try await launchProcess(
-                preferVideoToolbox: !(sessionState.isUsingVideoToolboxFallback),
+                preferVideoToolbox: !(providerStatus.isUsingVideoToolboxFallback),
                 isRetry: false
             )
         } catch {
-            AppLog.ffmpeg.error("Reconnect failed for camera \(self.cameraID.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            AppLog.ffmpeg.error("Reconnect failed for source \(self.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             await scheduleReconnect(reason: error.localizedDescription)
         }
     }
@@ -400,7 +431,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
 
         guard let resources = processResources else {
             if markAsStopped {
-                sessionState = updatedState(status: .stopped, error: nil, diagnostic: "Stopped")
+                providerStatus = updatedStatus(state: .stopped, error: nil, diagnostic: "Stopped")
             }
             return
         }
@@ -423,7 +454,7 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
         try? resources.stderrHandle.close()
 
         if markAsStopped {
-            sessionState = updatedState(status: .stopped, error: nil, diagnostic: "Stopped")
+            providerStatus = updatedStatus(state: .stopped, error: nil, diagnostic: "Stopped")
         }
     }
 
@@ -438,26 +469,33 @@ actor FFmpegPersistentFrameCaptureSession: FrameCaptureSession {
         }
     }
 
-    private func updatedState(
-        status: CaptureStatus,
+    private func updatedStatus(
+        state: FrameProviderState,
         error: String?,
         diagnostic: String
-    ) -> CaptureSessionState {
-        CaptureSessionState(
-            cameraID: cameraID,
-            status: status,
-            lastErrorMessage: error ?? stderrLines.last,
+    ) -> FrameProviderStatus {
+        FrameProviderStatus(
+            sourceID: id,
+            providerType: .ffmpeg,
+            state: state,
             lastFrameAt: lastFrameAt,
             lastFrameSequence: frameSequence == 0 ? nil : frameSequence,
-            isActive: processResources?.process.isRunning == true,
-            isReconnecting: status == .reconnecting,
+            lastError: error ?? stderrLines.last,
             restartCount: restartCount,
             configuredFPS: source.configuredFPS,
+            isActive: processResources?.process.isRunning == true,
+            isReconnecting: state == .reconnecting,
             sessionModeLabel: "FFmpeg RTSP",
-            usingVideoToolbox: sessionState.usingVideoToolbox,
-            isUsingVideoToolboxFallback: sessionState.isUsingVideoToolboxFallback,
+            usingVideoToolbox: providerStatus.usingVideoToolbox,
+            isUsingVideoToolboxFallback: providerStatus.isUsingVideoToolboxFallback,
             processIdentifier: processResources?.process.processIdentifier,
-            diagnosticMessage: diagnostic
+            diagnosticMessage: diagnostic,
+            webViewNavigationStatus: nil,
+            webViewWindowStatus: nil,
+            screenCaptureStatus: nil,
+            loadedURL: nil,
+            windowTitle: nil,
+            screenCapturePermissionDenied: false
         )
     }
 }

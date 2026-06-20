@@ -7,18 +7,22 @@ final class SettingsViewModel: ObservableObject {
     @Published var lastApplyMessage: String?
     @Published private(set) var localCameraDevices: [LocalCameraDevice] = []
     @Published private(set) var localCameraAuthorizationStatus: LocalCameraAuthorizationStatus = .notDetermined
+    @Published private(set) var webViewStatuses: [UUID: WebViewWindowRuntimeStatus] = [:]
 
     var onApply: (@MainActor ([CameraDefinition], AppPreferences) async -> Void)?
     private let localCameraDeviceProvider: LocalCameraDeviceProvider
+    private let webViewWindowManager: WebViewWindowManager
 
     init(
         cameras: [CameraDefinition],
         preferences: AppPreferences,
-        localCameraDeviceProvider: LocalCameraDeviceProvider
+        localCameraDeviceProvider: LocalCameraDeviceProvider,
+        webViewWindowManager: WebViewWindowManager
     ) {
         self.cameras = cameras.isEmpty ? [CameraDefinition()] : cameras
         self.preferences = preferences
         self.localCameraDeviceProvider = localCameraDeviceProvider
+        self.webViewWindowManager = webViewWindowManager
     }
 
     func addCamera() {
@@ -27,6 +31,7 @@ final class SettingsViewModel: ObservableObject {
 
     func removeCamera(id: UUID) {
         cameras.removeAll { $0.id == id }
+        webViewStatuses.removeValue(forKey: id)
         if cameras.isEmpty {
             cameras = [CameraDefinition()]
         }
@@ -65,6 +70,75 @@ final class SettingsViewModel: ObservableObject {
         await refreshLocalCameraDevices()
     }
 
+    func refreshWebViewStatus(for camera: CameraDefinition) {
+        webViewStatuses[camera.id] = webViewWindowManager.status(for: camera.id)
+    }
+
+    func openWebViewWindow(for camera: CameraDefinition) {
+        do {
+            try webViewWindowManager.openWindow(for: camera)
+        } catch {
+            webViewStatuses[camera.id] = WebViewWindowRuntimeStatus(
+                sourceID: camera.id,
+                windowTitle: camera.webViewWindowTitle,
+                loadedURL: camera.trimmedStreamURL,
+                isWindowOpen: false,
+                isVisible: false,
+                isLoading: false,
+                navigationStatus: "Failed",
+                windowStatus: "Unavailable",
+                lastError: error.localizedDescription,
+                windowID: nil
+            )
+            return
+        }
+
+        refreshWebViewStatus(for: camera)
+    }
+
+    func reloadWebViewWindow(for camera: CameraDefinition) {
+        do {
+            try webViewWindowManager.reloadWindow(for: camera)
+        } catch {
+            webViewStatuses[camera.id] = WebViewWindowRuntimeStatus(
+                sourceID: camera.id,
+                windowTitle: camera.webViewWindowTitle,
+                loadedURL: camera.trimmedStreamURL,
+                isWindowOpen: false,
+                isVisible: false,
+                isLoading: false,
+                navigationStatus: "Failed",
+                windowStatus: "Unavailable",
+                lastError: error.localizedDescription,
+                windowID: nil
+            )
+            return
+        }
+
+        refreshWebViewStatus(for: camera)
+    }
+
+    func showWebViewWindow(for cameraID: UUID) {
+        webViewWindowManager.showWindow(for: cameraID)
+        if let camera = cameras.first(where: { $0.id == cameraID }) {
+            refreshWebViewStatus(for: camera)
+        }
+    }
+
+    func hideWebViewWindow(for cameraID: UUID) {
+        webViewWindowManager.hideWindow(for: cameraID)
+        if let camera = cameras.first(where: { $0.id == cameraID }) {
+            refreshWebViewStatus(for: camera)
+        }
+    }
+
+    func bringWebViewWindowToFront(for cameraID: UUID) {
+        webViewWindowManager.bringWindowToFront(for: cameraID)
+        if let camera = cameras.first(where: { $0.id == cameraID }) {
+            refreshWebViewStatus(for: camera)
+        }
+    }
+
     func localCameraName(for uniqueID: String?) -> String? {
         guard let uniqueID else { return nil }
         return localCameraDevices.first(where: { $0.id == uniqueID })?.localizedName
@@ -76,9 +150,13 @@ final class SettingsViewModel: ObservableObject {
                 id: camera.id,
                 name: camera.name.trimmingCharacters(in: .whitespacesAndNewlines),
                 sceneName: camera.sceneName.trimmingCharacters(in: .whitespacesAndNewlines),
-                sourceType: camera.sourceType,
+                providerType: camera.providerType,
                 streamURL: camera.streamURL.trimmingCharacters(in: .whitespacesAndNewlines),
                 localDeviceUniqueID: camera.trimmedLocalDeviceUniqueID,
+                webViewWidth: max(320, camera.webViewWidth),
+                webViewHeight: max(180, camera.webViewHeight),
+                webViewWindowOriginX: camera.webViewWindowOriginX,
+                webViewWindowOriginY: camera.webViewWindowOriginY,
                 isEnabled: camera.isEnabled
             )
         }

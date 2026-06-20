@@ -3,7 +3,9 @@ import CoreImage
 import Foundation
 
 final class AVCaptureCameraSession: NSObject, @unchecked Sendable {
+    private let sourceID: UUID
     private let deviceUniqueID: String
+    private let providerType: FrameProviderType
     private let targetSize: CGSize
     private let sessionQueue = DispatchQueue(label: "CameraDirector.LocalCamera.Session", qos: .userInitiated)
     private let outputQueue = DispatchQueue(label: "CameraDirector.LocalCamera.Output", qos: .userInitiated)
@@ -14,8 +16,10 @@ final class AVCaptureCameraSession: NSObject, @unchecked Sendable {
 
     var onFrame: (@Sendable (CapturedFrame) -> Void)?
 
-    init(deviceUniqueID: String, targetSize: CGSize) {
+    init(sourceID: UUID, deviceUniqueID: String, providerType: FrameProviderType, targetSize: CGSize) {
+        self.sourceID = sourceID
         self.deviceUniqueID = deviceUniqueID
+        self.providerType = providerType
         self.targetSize = targetSize
         super.init()
     }
@@ -118,9 +122,11 @@ extension AVCaptureCameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         sequence += 1
         let frame = CapturedFrame(
+            sourceID: sourceID,
+            providerType: providerType,
             image: cgImage,
             capturedAt: Date(),
-            sourceFrameSequence: sequence,
+            sequence: sequence,
             pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
         )
         onFrame?(frame)

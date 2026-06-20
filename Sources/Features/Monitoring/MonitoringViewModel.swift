@@ -11,7 +11,7 @@ final class MonitoringViewModel: ObservableObject {
     @Published private(set) var lastRequestedOBSSceneName: String?
     @Published private(set) var isMonitoring = false
 
-    private let frameCaptureCoordinator: FrameCaptureCoordinator
+    private let frameProviderCoordinator: FrameProviderCoordinator
     private let faceDetectionManager: FaceDetectionManager
     private let selectionEngine: CameraSelectionEngine
     private let obsClient: OBSClient
@@ -22,19 +22,14 @@ final class MonitoringViewModel: ObservableObject {
 
     init(
         obsClient: OBSClient,
-        localCameraDeviceProvider: LocalCameraDeviceProvider,
+        frameProviderCoordinator: FrameProviderCoordinator,
         faceDetectionManager: FaceDetectionManager = FaceDetectionManager(),
         selectionEngine: CameraSelectionEngine = CameraSelectionEngine()
     ) {
         self.obsClient = obsClient
+        self.frameProviderCoordinator = frameProviderCoordinator
         self.faceDetectionManager = faceDetectionManager
         self.selectionEngine = selectionEngine
-        self.frameCaptureCoordinator = FrameCaptureCoordinator(
-            sessionFactory: FrameCaptureSessionFactory(
-                ffmpegLocator: FFmpegLocator(),
-                localCameraDeviceProvider: localCameraDeviceProvider
-            )
-        )
     }
 
     func applyConfiguration(cameras: [CameraDefinition], preferences: AppPreferences) async {
@@ -51,8 +46,8 @@ final class MonitoringViewModel: ObservableObject {
         lastAnalyzedFrameSequenceByCamera = [:]
         inFlightAnalysisCameraIDs = []
 
-        await frameCaptureCoordinator.apply(
-            cameras: cameras,
+        await frameProviderCoordinator.apply(
+            sources: cameras,
             captureInterval: preferences.clampedCaptureInterval
         )
 
@@ -103,7 +98,7 @@ final class MonitoringViewModel: ObservableObject {
 
     private func performMonitoringCycle() async {
         let activeCameras = cameras.filter(\.isEnabled)
-        let coordinator = frameCaptureCoordinator
+        let coordinator = frameProviderCoordinator
 
         if activeCameras.isEmpty {
             selectionReason = "No enabled camera sources."
@@ -115,11 +110,11 @@ final class MonitoringViewModel: ObservableObject {
             for camera in activeCameras {
                 group.addTask {
                     let frame = await coordinator.latestFrame(for: camera.id)
-                    let state = await coordinator.state(for: camera.id)
+                    let status = await coordinator.status(for: camera.id)
                     return CameraSnapshot(
                         camera: camera,
                         frame: frame,
-                        state: state
+                        status: status
                     )
                 }
             }
@@ -188,7 +183,7 @@ final class MonitoringViewModel: ObservableObject {
         let existing = runtimeStates
         runtimeStates = Dictionary(uniqueKeysWithValues: cameras.map { camera in
             var state = existing[camera.id] ?? CameraRuntimeState(id: camera.id)
-            state.sourceType = camera.sourceType
+            state.providerType = camera.providerType
             return (camera.id, state)
         })
     }
@@ -218,21 +213,28 @@ final class MonitoringViewModel: ObservableObject {
 
     private func applySnapshot(_ snapshot: CameraSnapshot, now: Date) {
         var runtimeState = runtimeStates[snapshot.camera.id] ?? CameraRuntimeState(id: snapshot.camera.id)
-        runtimeState.sourceType = snapshot.camera.sourceType
-        runtimeState.status = snapshot.state.status
-        runtimeState.errorMessage = snapshot.state.lastErrorMessage
-        runtimeState.lastCapturedAt = snapshot.frame?.capturedAt ?? snapshot.state.lastFrameAt
-        runtimeState.lastFrameSequence = snapshot.frame?.sourceFrameSequence ?? snapshot.state.lastFrameSequence
+        runtimeState.providerType = snapshot.camera.providerType
+        runtimeState.providerState = snapshot.status.state
+        runtimeState.status = snapshot.status.state.captureStatus
+        runtimeState.errorMessage = snapshot.status.lastError
+        runtimeState.lastCapturedAt = snapshot.frame?.capturedAt ?? snapshot.status.lastFrameAt
+        runtimeState.lastFrameSequence = snapshot.frame?.sequence ?? snapshot.status.lastFrameSequence
         runtimeState.imagePixelSize = snapshot.frame?.pixelSize
-        runtimeState.configuredFPS = snapshot.state.configuredFPS
-        runtimeState.sessionModeLabel = snapshot.state.sessionModeLabel
-        runtimeState.isSessionActive = snapshot.state.isActive
-        runtimeState.usingVideoToolbox = snapshot.state.usingVideoToolbox
-        runtimeState.isUsingVideoToolboxFallback = snapshot.state.isUsingVideoToolboxFallback
-        runtimeState.restartCount = snapshot.state.restartCount
-        runtimeState.isReconnecting = snapshot.state.isReconnecting
-        runtimeState.diagnosticMessage = snapshot.state.diagnosticMessage
-        runtimeState.processIdentifier = snapshot.state.processIdentifier
+        runtimeState.configuredFPS = snapshot.status.configuredFPS
+        runtimeState.sessionModeLabel = snapshot.status.sessionModeLabel
+        runtimeState.isSessionActive = snapshot.status.isActive
+        runtimeState.usingVideoToolbox = snapshot.status.usingVideoToolbox
+        runtimeState.isUsingVideoToolboxFallback = snapshot.status.isUsingVideoToolboxFallback
+        runtimeState.restartCount = snapshot.status.restartCount
+        runtimeState.isReconnecting = snapshot.status.isReconnecting
+        runtimeState.diagnosticMessage = snapshot.status.diagnosticMessage
+        runtimeState.processIdentifier = snapshot.status.processIdentifier
+        runtimeState.webViewNavigationStatus = snapshot.status.webViewNavigationStatus
+        runtimeState.webViewWindowStatus = snapshot.status.webViewWindowStatus
+        runtimeState.screenCaptureStatus = snapshot.status.screenCaptureStatus
+        runtimeState.loadedURL = snapshot.status.loadedURL
+        runtimeState.windowTitle = snapshot.status.windowTitle
+        runtimeState.screenCapturePermissionDenied = snapshot.status.screenCapturePermissionDenied
 
         if let frame = snapshot.frame {
             runtimeState.image = NSImage(cgImage: frame.image, size: frame.pixelSize)
@@ -252,7 +254,7 @@ final class MonitoringViewModel: ObservableObject {
                 guard let frame = snapshot.frame else { continue }
                 guard FrameAnalysisScheduler.shouldAnalyze(
                     cameraID: snapshot.camera.id,
-                    frameSequence: frame.sourceFrameSequence,
+                    frameSequence: frame.sequence,
                     lastAnalyzedFrameSequenceByCamera: lastAnalyzedFrameSequenceByCamera,
                     inFlightCameraIDs: inFlightAnalysisCameraIDs
                 ) else { continue }
@@ -265,14 +267,14 @@ final class MonitoringViewModel: ObservableObject {
                         let result = try await faceDetectionManager.detectFaces(in: frame.image)
                         return AnalysisResult(
                             cameraID: snapshot.camera.id,
-                            frameSequence: frame.sourceFrameSequence,
+                            frameSequence: frame.sequence,
                             detectionResult: result,
                             errorMessage: nil
                         )
                     } catch {
                         return AnalysisResult(
                             cameraID: snapshot.camera.id,
-                            frameSequence: frame.sourceFrameSequence,
+                            frameSequence: frame.sequence,
                             detectionResult: nil,
                             errorMessage: error.localizedDescription
                         )
@@ -308,7 +310,7 @@ final class MonitoringViewModel: ObservableObject {
 private struct CameraSnapshot {
     let camera: CameraDefinition
     let frame: CapturedFrame?
-    let state: CaptureSessionState
+    let status: FrameProviderStatus
 }
 
 private struct AnalysisResult {
@@ -316,4 +318,23 @@ private struct AnalysisResult {
     let frameSequence: UInt64
     let detectionResult: FaceDetectionResult?
     let errorMessage: String?
+}
+
+private extension FrameProviderState {
+    var captureStatus: CaptureStatus {
+        switch self {
+        case .idle:
+            return .idle
+        case .starting, .waitingForFrame:
+            return .starting
+        case .running:
+            return .capturing
+        case .reconnecting:
+            return .reconnecting
+        case .stopped:
+            return .stopped
+        case .failed:
+            return .error
+        }
+    }
 }

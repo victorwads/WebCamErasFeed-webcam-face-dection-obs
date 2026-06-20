@@ -22,7 +22,8 @@ struct CameraRuntimeState: Identifiable {
     var errorMessage: String?
     var isSelected: Bool
     var selectionReason: String?
-    var sourceType: CameraSourceType
+    var providerType: FrameProviderType
+    var providerState: FrameProviderState?
     var configuredFPS: Double?
     var sessionModeLabel: String?
     var isSessionActive: Bool
@@ -33,6 +34,12 @@ struct CameraRuntimeState: Identifiable {
     var lastFrameAgeDescription: String?
     var diagnosticMessage: String?
     var processIdentifier: Int32?
+    var webViewNavigationStatus: String?
+    var webViewWindowStatus: String?
+    var screenCaptureStatus: String?
+    var loadedURL: String?
+    var windowTitle: String?
+    var screenCapturePermissionDenied: Bool
 
     init(
         id: UUID,
@@ -45,7 +52,8 @@ struct CameraRuntimeState: Identifiable {
         errorMessage: String? = nil,
         isSelected: Bool = false,
         selectionReason: String? = nil,
-        sourceType: CameraSourceType = .networkStream,
+        providerType: FrameProviderType = .ffmpeg,
+        providerState: FrameProviderState? = nil,
         configuredFPS: Double? = nil,
         sessionModeLabel: String? = nil,
         isSessionActive: Bool = false,
@@ -55,7 +63,13 @@ struct CameraRuntimeState: Identifiable {
         isReconnecting: Bool = false,
         lastFrameAgeDescription: String? = nil,
         diagnosticMessage: String? = nil,
-        processIdentifier: Int32? = nil
+        processIdentifier: Int32? = nil,
+        webViewNavigationStatus: String? = nil,
+        webViewWindowStatus: String? = nil,
+        screenCaptureStatus: String? = nil,
+        loadedURL: String? = nil,
+        windowTitle: String? = nil,
+        screenCapturePermissionDenied: Bool = false
     ) {
         self.id = id
         self.image = image
@@ -67,7 +81,8 @@ struct CameraRuntimeState: Identifiable {
         self.errorMessage = errorMessage
         self.isSelected = isSelected
         self.selectionReason = selectionReason
-        self.sourceType = sourceType
+        self.providerType = providerType
+        self.providerState = providerState
         self.configuredFPS = configuredFPS
         self.sessionModeLabel = sessionModeLabel
         self.isSessionActive = isSessionActive
@@ -78,5 +93,16 @@ struct CameraRuntimeState: Identifiable {
         self.lastFrameAgeDescription = lastFrameAgeDescription
         self.diagnosticMessage = diagnosticMessage
         self.processIdentifier = processIdentifier
+        self.webViewNavigationStatus = webViewNavigationStatus
+        self.webViewWindowStatus = webViewWindowStatus
+        self.screenCaptureStatus = screenCaptureStatus
+        self.loadedURL = loadedURL
+        self.windowTitle = windowTitle
+        self.screenCapturePermissionDenied = screenCapturePermissionDenied
+    }
+
+    var sourceType: FrameProviderType {
+        get { providerType }
+        set { providerType = newValue }
     }
 }

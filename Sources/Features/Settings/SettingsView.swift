@@ -28,6 +28,7 @@ struct SettingsView: View {
                                 camera: $viewModel.cameras[index],
                                 localCameraDevices: viewModel.localCameraDevices,
                                 localCameraAuthorizationStatus: viewModel.localCameraAuthorizationStatus,
+                                webViewStatus: viewModel.webViewStatuses[viewModel.cameras[index].id],
                                 onRemove: { viewModel.removeCamera(id: viewModel.cameras[index].id) },
                                 onMoveUp: { viewModel.moveCameraUp(id: viewModel.cameras[index].id) },
                                 onMoveDown: { viewModel.moveCameraDown(id: viewModel.cameras[index].id) },
@@ -40,6 +41,21 @@ struct SettingsView: View {
                                     Task {
                                         await viewModel.requestLocalCameraPermission()
                                     }
+                                },
+                                onOpenWebViewWindow: {
+                                    viewModel.openWebViewWindow(for: viewModel.cameras[index])
+                                },
+                                onReloadWebViewWindow: {
+                                    viewModel.reloadWebViewWindow(for: viewModel.cameras[index])
+                                },
+                                onShowWebViewWindow: {
+                                    viewModel.showWebViewWindow(for: viewModel.cameras[index].id)
+                                },
+                                onHideWebViewWindow: {
+                                    viewModel.hideWebViewWindow(for: viewModel.cameras[index].id)
+                                },
+                                onBringWebViewWindowToFront: {
+                                    viewModel.bringWebViewWindowToFront(for: viewModel.cameras[index].id)
                                 },
                                 canMoveUp: index > 0,
                                 canMoveDown: index < viewModel.cameras.count - 1

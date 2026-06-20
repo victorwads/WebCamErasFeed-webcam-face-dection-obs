@@ -20,9 +20,11 @@ final class LatestCapturedFrameStoreTests: XCTestCase {
         let data = Data([value, value, value, 255])
         let image = try BGRACGImageConverter.makeImage(from: data, width: 1, height: 1)
         return CapturedFrame(
+            sourceID: UUID(),
+            providerType: .ffmpeg,
             image: image,
             capturedAt: Date(),
-            sourceFrameSequence: sequence,
+            sequence: sequence,
             pixelSize: CGSize(width: 1, height: 1)
         )
     }

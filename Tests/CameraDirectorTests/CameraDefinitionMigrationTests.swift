@@ -2,7 +2,7 @@ import XCTest
 @testable import CameraDirector
 
 final class CameraDefinitionMigrationTests: XCTestCase {
-    func testLegacyCameraDefinitionDefaultsToNetworkStream() throws {
+    func testLegacyCameraDefinitionDefaultsToFFmpegProvider() throws {
         let json = """
         {
           "id": "00000000-0000-0000-0000-000000000001",
@@ -14,7 +14,7 @@ final class CameraDefinitionMigrationTests: XCTestCase {
         """
 
         let camera = try JSONDecoder().decode(CameraDefinition.self, from: Data(json.utf8))
-        XCTAssertEqual(camera.sourceType, .networkStream)
+        XCTAssertEqual(camera.providerType, .ffmpeg)
         XCTAssertNil(camera.localDeviceUniqueID)
     }
 }

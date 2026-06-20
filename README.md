@@ -1,35 +1,98 @@
 # CameraDirector
 
-CameraDirector is a native macOS app built with Swift, SwiftUI and XcodeGen. It monitors multiple camera sources, keeps a persistent capture session per enabled source, runs Apple Vision face detection on the latest frames and can drive OBS scene switching from the live results.
+CameraDirector is a native macOS app built with Swift, SwiftUI and XcodeGen. It monitors multiple video sources, captures the latest frame from each provider, runs Apple Vision face detection, scores the cameras and can switch OBS scenes automatically through obs-websocket v5.
 
-## Architecture
+## Provider Architecture
 
-The original implementation started a fresh FFmpeg process every time the analysis timer fired. That meant reconnecting to RTSP, waiting for a decodable frame, extracting one image and shutting the process down again.
+The original app was centered on a frame-capture layer tied closely to FFmpeg sessions. The current architecture is provider-based:
 
-The current architecture is persistent:
+- `FrameProvider` is the single contract used by monitoring, Vision, scoring and OBS.
+- `FrameProviderCoordinator` owns active providers and applies configuration incrementally.
+- `CapturedFrame` is the common frame model used everywhere after capture.
+- `FrameProviderStatus` is the common runtime status model used by monitoring and diagnostics.
 
-- RTSP sources use one long-lived FFmpeg process per enabled camera.
-- Local webcams use one long-lived `AVCaptureSession` per enabled camera.
-- Each session keeps only the most recent frame in memory.
-- The monitoring scheduler consumes the latest frame at the configured interval.
-- Vision analyzes only new frames and never starts FFmpeg itself.
+The shared contract is:
 
-## Source Types
+```swift
+protocol FrameProvider: Sendable {
+    var id: UUID { get }
+    var configuration: CameraDefinition { get }
 
-Each camera can use one of these source types:
+    func start() async throws
+    func stop() async
+    func getSnapshot() async throws -> CapturedFrame
+    func latestFrame() async -> CapturedFrame?
+    func getStatus() async -> FrameProviderStatus
+}
+```
 
-- `Network Stream`: RTSP stream captured through a persistent FFmpeg subprocess.
-- `Local Camera`: macOS webcam captured through AVFoundation.
+The rest of the app does not need to know whether a frame came from FFmpeg, a WebView window or a local webcam.
 
-Both source types still participate in face detection, camera scoring and OBS scene switching.
+## Supported Providers
+
+Each camera/source can use one of these provider types:
+
+- `FFmpeg RTSP`
+- `WebView WebRTC`
+- `Local Camera`
+
+`CameraDefinition` preserves backward compatibility with older saved data that used the previous `sourceType` field. Legacy records migrate automatically to `providerType = .ffmpeg`.
+
+## Capture Flow
+
+### FFmpeg RTSP
+
+- one persistent FFmpeg subprocess per enabled RTSP source
+- latest BGRA frame kept in memory
+- `getSnapshot()` returns the latest frame immediately
+- automatic reconnect and VideoToolbox fallback remain enabled
+
+### WebView WebRTC
+
+This is the new flow for go2rtc WebRTC pages:
+
+```text
+go2rtc WebRTC URL
+-> WKWebView
+-> borderless NSWindow
+-> OBS Window Capture
+-> ScreenCaptureKit
+-> latest CapturedFrame
+-> Vision
+```
+
+Important details:
+
+- each WebView source owns a dedicated borderless `NSWindow`
+- the window title is stable, for example `WebCamErasFeed — Camera C300`
+- `WKWebView.takeSnapshot()` is not used as the main path
+- frames come from `ScreenCaptureKit`, not from WebKit snapshots
+- the embedded media is muted and autoplay is requested
+- `getSnapshot()` returns the latest frame already received by `ScreenCaptureKit`
+
+### Local Camera
+
+- one persistent `AVCaptureSession` per enabled local camera
+- `AVCaptureVideoDataOutput` with `alwaysDiscardsLateVideoFrames = true`
+- latest frame only, no preview queue buildup
+
+## Why `WKWebView.takeSnapshot()` Is Not Used
+
+WebRTC video inside a `WKWebView` can be rendered in accelerated layers. A WebKit snapshot can return:
+
+- black frames
+- stale frames
+- missing video content
+
+For that reason the WebView provider renders the page normally in a native window, and `ScreenCaptureKit` captures the final window surface.
 
 ## Requirements
 
 - macOS 14 or later
 - Xcode 15 or later
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-- FFmpeg installed locally for RTSP sources
-- OBS Studio with obs-websocket v5 enabled if you want scene control
+- [FFmpeg](https://ffmpeg.org/) installed locally for RTSP sources
+- OBS Studio with obs-websocket v5 enabled if automatic scene switching is desired
 
 ## Install XcodeGen
 
@@ -43,38 +106,36 @@ brew install xcodegen
 brew install ffmpeg
 ```
 
-The app automatically searches for FFmpeg in these locations:
+The app automatically searches for FFmpeg in:
 
 - `/opt/homebrew/bin/ffmpeg`
 - `/usr/local/bin/ffmpeg`
 - `/usr/bin/ffmpeg`
 
-## Generate the Xcode Project
+## Generate the Project
 
 ```bash
 xcodegen generate
 open CameraDirector.xcodeproj
 ```
 
-## Build From the Command Line
+## Build
 
 ```bash
 xcodebuild -project CameraDirector.xcodeproj -scheme CameraDirector -configuration Debug build
 ```
 
-## Run Tests
+## Test
 
 ```bash
-xcodebuild -project CameraDirector.xcodeproj -scheme CameraDirector test
+xcodebuild -project CameraDirector.xcodeproj -scheme CameraDirector -configuration Debug test
 ```
-
-If the environment blocks `testmanagerd`, the build still validates the test target compilation, but the XCTest execution itself may fail outside a normal macOS developer session.
 
 ## Capture Interval
 
-`Capture Interval` is the analysis cadence, not a per-frame FFmpeg restart delay.
+`Capture Interval` is the analysis cadence used by monitoring and Vision.
 
-The app converts the interval into capture FPS for RTSP sessions:
+The app converts it to provider FPS with:
 
 ```swift
 fps = min(10.0, max(0.1, 1.0 / captureInterval))
@@ -88,106 +149,111 @@ Examples:
 - `5.0 s` -> `0.2 FPS`
 - `10.0 s` -> `0.1 FPS`
 
-## RTSP Capture
+## go2rtc WebRTC Example
 
-For network streams, the app starts one persistent FFmpeg process per enabled source and keeps it alive while monitoring remains active.
-
-Key points:
-
-- Video only, first video stream only
-- Audio ignored
-- Fixed analysis resolution `640x360`
-- Raw `bgra` frames over `stdout`
-- Partial chunk parsing supported
-- Automatic reconnect with backoff when FFmpeg exits or the stream stalls
-- VideoToolbox requested first, with software fallback if hardware decoding fails
-
-Typical command shape:
+Example page URL:
 
 ```text
--hide_banner
--loglevel warning
--rtsp_transport tcp
--hwaccel videotoolbox
--i STREAM_URL
--map 0:v:0
--an
--vf fps=DESIRED_FPS,scale=640:360
--pix_fmt bgra
--f rawvideo
-pipe:1
+http://127.0.0.1:1984/webrtc.html?src=camera_c300&media=video
 ```
 
-## Local Webcam Capture
+Use `media=video` so the embedded page stays video-only.
 
-Local cameras do not use FFmpeg in the first path.
+## How to Add a WebView Source
 
-The app uses:
+1. Open `Settings`.
+2. Add a new source.
+3. Choose `WebView WebRTC` as `Provider Type`.
+4. Fill:
+   - `Name`
+   - `OBS Scene Name`
+   - `WebRTC Page URL`
+   - `Window Width`
+   - `Window Height`
+5. Click `Open Window`.
+6. Confirm that the dedicated window shows the camera stream.
+7. Click `Save and Apply`.
 
-- `AVCaptureDevice`
-- `AVCaptureSession`
-- `AVCaptureDeviceInput`
-- `AVCaptureVideoDataOutput`
-- `AVCaptureVideoDataOutputSampleBufferDelegate`
+The monitoring provider will then attach `ScreenCaptureKit` to that same window.
 
-The UI shows:
+## Screen Recording Permission
 
-- available local devices
-- permission status
-- refresh button
-- warning when the configured webcam no longer exists
+The WebView provider may require Screen Recording permission depending on the capture path available on the current macOS version and environment.
 
-## Camera Permission
+If the app reports a permission error:
 
-Local webcams require macOS camera permission.
+1. Open `System Settings`
+2. Open `Privacy & Security`
+3. Open `Screen Recording`
+4. Enable access for `CameraDirector`
+5. Restart the app if needed
 
-The project includes `NSCameraUsageDescription`, and the app requests permission through:
+The monitoring cards surface this as a provider error instead of failing silently.
+
+## Local Camera Permission
+
+Local webcam providers use AVFoundation and require camera permission.
+
+The app includes:
+
+```text
+NSCameraUsageDescription
+```
+
+and requests access through:
 
 ```swift
 AVCaptureDevice.requestAccess(for: .video)
 ```
 
-## OBS WebSocket Setup
+## OBS Setup
+
+### WebSocket
 
 1. Open OBS Studio.
 2. Go to `Tools > WebSocket Server Settings`.
 3. Enable the server.
-4. Keep the default host `127.0.0.1` and port `4455`, or update the app settings.
-5. Set a password if desired and use the same password in CameraDirector.
+4. Use host `127.0.0.1` and port `4455`, or match the app settings.
+5. Configure a password if desired.
 
-## Prepare OBS Scenes
+### Scenes
 
-Create one OBS scene per camera and use the exact scene names in the app:
+Create one OBS scene per camera/source and use the exact scene names in CameraDirector.
 
-- `Desk Scene`
-- `Wide Scene`
-- `Closeup Scene`
+### WebView Window Capture
 
-Local webcams also use `sceneName`, so they can participate in automatic switching exactly like RTSP sources.
+For each WebView source:
 
-## Example RTSP URL
+1. Open the corresponding CameraDirector WebView window.
+2. In OBS, create or open the scene for that camera.
+3. Add `Window Capture`.
+4. Select the CameraDirector window by its title.
+5. Disable cursor capture.
+6. Keep the CameraDirector window alive.
 
-With go2rtc, a typical RTSP URL can look like this:
+CameraDirector can then keep controlling which OBS scene is active through obs-websocket.
 
-```text
-rtsp://127.0.0.1:8554/camera_c300
-```
+## Monitoring Diagnostics
 
-## How to Run
+The monitoring cards now show provider-level diagnostics such as:
 
-1. Generate the project with XcodeGen.
-2. Open `CameraDirector.xcodeproj`.
-3. Run the app from Xcode.
-4. In `Settings`, add one or more sources.
-5. Choose `Network Stream` or `Local Camera`.
-6. Set the capture interval.
-7. Optionally enable OBS integration and connect.
-8. Click `Save and Apply`.
-9. Open `Monitoring` to inspect frames, diagnostics, detected faces and the selected camera.
+- provider type
+- provider state
+- latest frame timestamp
+- frame sequence
+- frame age
+- restart count
+- FFmpeg PID
+- VideoToolbox usage
+- WebView navigation state
+- window visibility state
+- ScreenCaptureKit status
+- loaded URL
+- permission errors
 
-## Diagnostics
+## Useful Commands
 
-Useful commands when validating RTSP sessions:
+For RTSP validation:
 
 ```bash
 pgrep -fl ffmpeg
@@ -196,59 +262,35 @@ ps aux | grep ffmpeg
 
 Expected behavior:
 
-- one persistent FFmpeg process per enabled RTSP camera
-- no new FFmpeg process for every analysis tick
+- one persistent FFmpeg process per enabled RTSP source
 - stable PID while the stream is healthy
+- no new FFmpeg process on every monitoring cycle
 
-The monitoring cards also show:
+## Face Detection and Selection
 
-- source type
-- session mode
-- configured FPS
-- last frame sequence
-- frame age
-- restart count
-- reconnecting state
-- VideoToolbox usage or fallback
-- FFmpeg PID when applicable
+All providers feed the same pipeline:
 
-## Reconnection Behavior
+```text
+FrameProvider
+-> CapturedFrame
+-> Vision
+-> FaceDetectionResult
+-> CameraSelectionEngine
+-> OBS
+```
 
-When an RTSP session stops producing frames or FFmpeg exits unexpectedly, the app:
+Automatic selection still uses lexicographic priority:
 
-1. marks the session as reconnecting
-2. terminates the dead process
-3. retries with backoff
+1. more faces
+2. larger face
+3. larger total face area
+4. keep current camera on ties when possible
 
-Backoff sequence:
+## Known Limitations
 
-- `1 s`
-- `2 s`
-- `5 s`
-- `10 s`
-
-The backoff resets after healthy frames arrive again.
-
-## HEVC Notes
-
-HEVC streams often depend on keyframes and hardware decode availability. The persistent architecture avoids reconnecting on every analysis tick, which greatly reduces startup latency and keyframe churn, but behavior can still vary depending on:
-
-- stream stability
-- GOP size
-- HEVC encoder behavior
-- VideoToolbox compatibility on the current Mac
-
-If hardware decoding fails, the app automatically retries without `-hwaccel videotoolbox`.
-
-## CPU and GPU Expectations
-
-- RTSP decode may use GPU acceleration through VideoToolbox when available.
-- Software fallback increases CPU usage.
-- Local webcam capture uses AVFoundation and CI-based conversion.
-- The app keeps only the newest frame per source, which reduces memory pressure compared with queueing many frames.
-
-## Current Limitations
-
-- UI updates still happen on the analysis cadence rather than a separate render loop.
-- Local camera capture prefers a near-`640x360` path, but the exact native device resolution may vary.
-- The direct `xcodebuild test` run can depend on the host environment allowing XCTest services.
+- WebView window position persistence is still basic compared with size persistence.
+- The WebView provider depends on the page rendering correctly inside `WKWebView`.
+- Some WebRTC pages may still require source-specific tuning in go2rtc.
+- ScreenCaptureKit behavior can vary depending on macOS permissions and compositor state.
+- FFmpeg HEVC sources may still depend on stream quality, GOP structure and hardware decode compatibility.
+- The test host may still emit harmless system-service warnings from macOS when launching the app bundle under XCTest.
