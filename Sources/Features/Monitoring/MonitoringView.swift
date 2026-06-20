@@ -43,8 +43,8 @@ struct MonitoringView: View {
 
                 if viewModel.orderedRuntimeStates().isEmpty {
                     DSEmptyState(
-                        title: "No cameras yet",
-                        message: "Add cameras in Settings and click Save and Apply."
+                        title: "No enabled cameras",
+                        message: "Enable at least one source in Settings and click Save and Apply."
                     )
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {

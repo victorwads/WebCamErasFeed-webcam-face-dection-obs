@@ -58,9 +58,45 @@ struct CameraPreviewCard: View {
                     if currentOBSSceneName == camera.trimmedSceneName, !camera.trimmedSceneName.isEmpty {
                         DSStatusBadge(title: "OBS Live", color: .blue)
                     }
+                    if runtimeState.isReconnecting {
+                        DSStatusBadge(title: "Reconnecting", color: .orange)
+                    }
                 }
 
                 FaceDetectionDetailsView(result: runtimeState.detectionResult)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Source: \(camera.sourceSummary)")
+                    Text("Session: \(runtimeState.sessionModeLabel ?? "Unknown")")
+                    if let fps = runtimeState.configuredFPS {
+                        Text("Configured rate: \(fps.formattedFPS)")
+                    }
+                    if let sequence = runtimeState.lastFrameSequence {
+                        Text("Last frame sequence: \(sequence)")
+                    }
+                    if let age = runtimeState.lastFrameAgeDescription {
+                        Text("Frame age: \(age)")
+                    }
+                    Text("Restarts: \(runtimeState.restartCount)")
+
+                    if let pid = runtimeState.processIdentifier {
+                        Text("FFmpeg PID: \(pid)")
+                    }
+
+                    if let usingVideoToolbox = runtimeState.usingVideoToolbox {
+                        Text("VideoToolbox: \(usingVideoToolbox ? "Enabled" : "Disabled")")
+                    }
+
+                    if runtimeState.isUsingVideoToolboxFallback {
+                        Text("Hardware decode fallback active")
+                    }
+
+                    if let diagnosticMessage = runtimeState.diagnosticMessage {
+                        Text("Diagnostic: \(diagnosticMessage)")
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
                 if let capturedAt = runtimeState.lastCapturedAt {
                     Text("Last frame: \(capturedAt.formatted(date: .omitted, time: .standard))")
@@ -87,10 +123,16 @@ struct CameraPreviewCard: View {
         switch runtimeState.status {
         case .idle:
             return .gray
+        case .starting:
+            return .mint
         case .capturing:
             return .blue
         case .processing:
             return .orange
+        case .reconnecting:
+            return .yellow
+        case .stopped:
+            return .gray
         case .error:
             return .red
         }

@@ -8,25 +8,32 @@ final class AppState: ObservableObject {
 
     private let preferencesStore: PreferencesStore
     private let cameraDefinitionsStore: CameraDefinitionsStore
+    private let localCameraDeviceProvider: LocalCameraDeviceProvider
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
         cameraDefinitionsStore: CameraDefinitionsStore = CameraDefinitionsStore()
     ) {
         let obsClient = OBSClient()
+        let localCameraDeviceProvider = LocalCameraDeviceProvider()
 
         self.preferencesStore = preferencesStore
         self.cameraDefinitionsStore = cameraDefinitionsStore
         self.obsClient = obsClient
+        self.localCameraDeviceProvider = localCameraDeviceProvider
 
         let storedPreferences = preferencesStore.load()
         let storedCameras = cameraDefinitionsStore.load()
 
         let settingsViewModel = SettingsViewModel(
             cameras: storedCameras,
-            preferences: storedPreferences
+            preferences: storedPreferences,
+            localCameraDeviceProvider: localCameraDeviceProvider
         )
-        let monitoringViewModel = MonitoringViewModel(obsClient: obsClient)
+        let monitoringViewModel = MonitoringViewModel(
+            obsClient: obsClient,
+            localCameraDeviceProvider: localCameraDeviceProvider
+        )
 
         self.settingsViewModel = settingsViewModel
         self.monitoringViewModel = monitoringViewModel

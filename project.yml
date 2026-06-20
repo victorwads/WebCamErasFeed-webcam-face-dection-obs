@@ -21,7 +21,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.victorwads.CameraDirector
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_KEY_CFBundleDisplayName: CameraDirector
-        INFOPLIST_KEY_NSCameraUsageDescription: CameraDirector captures still frames from RTSP streams.
+        INFOPLIST_KEY_NSCameraUsageDescription: CameraDirector needs camera access to capture frames from local webcams for monitoring and face detection.
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
     scheme:
-      testTargets: []
+      testTargets:
+        - CameraDirectorTests
+  CameraDirectorTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: CameraDirector
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.victorwads.CameraDirectorTests
+        PRODUCT_NAME: CameraDirectorTests
+        PRODUCT_MODULE_NAME: CameraDirectorTests

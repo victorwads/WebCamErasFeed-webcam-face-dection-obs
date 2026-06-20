@@ -6,6 +6,12 @@ struct CameraScore: Comparable, Sendable, Equatable {
     let largestFaceArea: CGFloat
     let totalFaceArea: CGFloat
 
+    init(faceCount: Int, largestFaceArea: CGFloat, totalFaceArea: CGFloat) {
+        self.faceCount = faceCount
+        self.largestFaceArea = largestFaceArea
+        self.totalFaceArea = totalFaceArea
+    }
+
     init(result: FaceDetectionResult) {
         self.faceCount = result.faceCount
         self.largestFaceArea = result.largestFaceArea

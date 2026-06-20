@@ -26,9 +26,21 @@ struct SettingsView: View {
                         ForEach(Array(viewModel.cameras.enumerated()), id: \.element.id) { index, _ in
                             CameraDefinitionEditor(
                                 camera: $viewModel.cameras[index],
+                                localCameraDevices: viewModel.localCameraDevices,
+                                localCameraAuthorizationStatus: viewModel.localCameraAuthorizationStatus,
                                 onRemove: { viewModel.removeCamera(id: viewModel.cameras[index].id) },
                                 onMoveUp: { viewModel.moveCameraUp(id: viewModel.cameras[index].id) },
                                 onMoveDown: { viewModel.moveCameraDown(id: viewModel.cameras[index].id) },
+                                onRefreshDevices: {
+                                    Task {
+                                        await viewModel.refreshLocalCameraDevices()
+                                    }
+                                },
+                                onRequestAccess: {
+                                    Task {
+                                        await viewModel.requestLocalCameraPermission()
+                                    }
+                                },
                                 canMoveUp: index > 0,
                                 canMoveDown: index < viewModel.cameras.count - 1
                             )
@@ -65,6 +77,9 @@ struct SettingsView: View {
                 }
             }
             .padding(.vertical, 8)
+        }
+        .task {
+            await viewModel.refreshLocalCameraDevices()
         }
     }
 }

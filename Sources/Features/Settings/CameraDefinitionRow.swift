@@ -11,13 +11,18 @@ struct CameraDefinitionRow: View {
             )
 
             DSStatusBadge(
-                title: camera.hasValidStreamURL ? "RTSP Ready" : "Invalid URL",
-                color: camera.hasValidStreamURL ? .blue : .orange
+                title: camera.sourceType == .networkStream ? "RTSP Source" : "Local Camera",
+                color: camera.sourceType == .networkStream ? .blue : .teal
             )
 
             if !camera.trimmedSceneName.isEmpty {
                 DSStatusBadge(title: "OBS Scene Set", color: .purple)
             }
+
+            DSStatusBadge(
+                title: camera.isValidSourceConfiguration ? "Source Ready" : "Source Incomplete",
+                color: camera.isValidSourceConfiguration ? .green : .orange
+            )
         }
     }
 }

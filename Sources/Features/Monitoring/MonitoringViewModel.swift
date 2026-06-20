@@ -11,23 +11,30 @@ final class MonitoringViewModel: ObservableObject {
     @Published private(set) var lastRequestedOBSSceneName: String?
     @Published private(set) var isMonitoring = false
 
-    private let frameCaptureManager: FrameCaptureManager
+    private let frameCaptureCoordinator: FrameCaptureCoordinator
     private let faceDetectionManager: FaceDetectionManager
     private let selectionEngine: CameraSelectionEngine
     private let obsClient: OBSClient
     private var preferences: AppPreferences = .default
     private var monitoringTask: Task<Void, Never>?
+    private var lastAnalyzedFrameSequenceByCamera: [UUID: UInt64] = [:]
+    private var inFlightAnalysisCameraIDs: Set<UUID> = []
 
     init(
         obsClient: OBSClient,
-        frameCaptureManager: FrameCaptureManager = FrameCaptureManager(),
+        localCameraDeviceProvider: LocalCameraDeviceProvider,
         faceDetectionManager: FaceDetectionManager = FaceDetectionManager(),
         selectionEngine: CameraSelectionEngine = CameraSelectionEngine()
     ) {
         self.obsClient = obsClient
-        self.frameCaptureManager = frameCaptureManager
         self.faceDetectionManager = faceDetectionManager
         self.selectionEngine = selectionEngine
+        self.frameCaptureCoordinator = FrameCaptureCoordinator(
+            sessionFactory: FrameCaptureSessionFactory(
+                ffmpegLocator: FFmpegLocator(),
+                localCameraDeviceProvider: localCameraDeviceProvider
+            )
+        )
     }
 
     func applyConfiguration(cameras: [CameraDefinition], preferences: AppPreferences) async {
@@ -37,11 +44,17 @@ final class MonitoringViewModel: ObservableObject {
         monitoringTask?.cancel()
         monitoringTask = nil
         await selectionEngine.reset()
-        await frameCaptureManager.reset()
         isMonitoring = false
         selectedCameraID = nil
         selectionReason = "Monitoring ready."
         rebuildRuntimeStates()
+        lastAnalyzedFrameSequenceByCamera = [:]
+        inFlightAnalysisCameraIDs = []
+
+        await frameCaptureCoordinator.apply(
+            cameras: cameras,
+            captureInterval: preferences.clampedCaptureInterval
+        )
 
         if preferences.obsConfiguration.isEnabled, obsClient.connectionState != .connected {
             await obsClient.connect(using: preferences.obsConfiguration)
@@ -63,8 +76,8 @@ final class MonitoringViewModel: ObservableObject {
         cameras
             .filter(\.isEnabled)
             .map { camera in
-            (camera, runtimeStates[camera.id] ?? CameraRuntimeState(id: camera.id))
-        }
+                (camera, runtimeStates[camera.id] ?? CameraRuntimeState(id: camera.id))
+            }
     }
 
     func switchToScene(for camera: CameraDefinition) {
@@ -89,55 +102,37 @@ final class MonitoringViewModel: ObservableObject {
     }
 
     private func performMonitoringCycle() async {
-        let activeCameras = cameras.filter { $0.isEnabled && $0.hasValidStreamURL }
+        let activeCameras = cameras.filter(\.isEnabled)
+        let coordinator = frameCaptureCoordinator
 
         if activeCameras.isEmpty {
-            selectionReason = "No enabled cameras with valid RTSP URLs."
+            selectionReason = "No enabled camera sources."
             clearTransientDetectionData()
             return
         }
 
-        updateStatuses(for: activeCameras.map(\.id), status: .capturing, errorMessage: nil)
-
-        let cycleResults = await withTaskGroup(of: CameraCycleResult.self) { group in
+        let snapshots = await withTaskGroup(of: CameraSnapshot.self) { group in
             for camera in activeCameras {
-                let faceDetectionEnabled = preferences.isFaceDetectionEnabled
                 group.addTask {
-                    await Self.captureAndProcessCamera(
+                    let frame = await coordinator.latestFrame(for: camera.id)
+                    let state = await coordinator.state(for: camera.id)
+                    return CameraSnapshot(
                         camera: camera,
-                        frameCaptureManager: self.frameCaptureManager,
-                        faceDetectionManager: self.faceDetectionManager,
-                        faceDetectionEnabled: faceDetectionEnabled
+                        frame: frame,
+                        state: state
                     )
                 }
             }
 
-            var collected: [CameraCycleResult] = []
-            for await result in group {
-                collected.append(result)
+            var collected: [CameraSnapshot] = []
+            for await snapshot in group {
+                collected.append(snapshot)
             }
             return collected
         }
 
-        var scores: [UUID: CameraScore] = [:]
-
-        for result in cycleResults {
-            if preferences.isFaceDetectionEnabled, result.errorMessage == nil {
-                runtimeStates[result.camera.id]?.status = .processing
-            }
-
-            var runtimeState = runtimeStates[result.camera.id] ?? CameraRuntimeState(id: result.camera.id)
-            runtimeState.image = result.frame?.nsImage
-            runtimeState.imagePixelSize = result.frame?.pixelSize
-            runtimeState.lastCapturedAt = result.capturedAt
-            runtimeState.errorMessage = result.errorMessage
-            runtimeState.status = result.errorMessage == nil ? .idle : .error
-            runtimeState.detectionResult = preferences.isFaceDetectionEnabled ? result.detectionResult : nil
-            runtimeStates[result.camera.id] = runtimeState
-
-            if let detectionResult = result.detectionResult {
-                scores[result.camera.id] = CameraScore(result: detectionResult)
-            }
+        for snapshot in snapshots {
+            applySnapshot(snapshot, now: Date())
         }
 
         if !preferences.isFaceDetectionEnabled {
@@ -145,6 +140,18 @@ final class MonitoringViewModel: ObservableObject {
             selectionReason = "Face detection is disabled."
             clearDetectionSelections()
             return
+        }
+
+        let analysisResults = await analyzeNewFrames(from: snapshots)
+        for result in analysisResults {
+            applyAnalysisResult(result)
+        }
+
+        var scores: [UUID: CameraScore] = [:]
+        for camera in activeCameras {
+            if let result = runtimeStates[camera.id]?.detectionResult {
+                scores[camera.id] = CameraScore(result: result)
+            }
         }
 
         let selection = await selectionEngine.evaluate(
@@ -180,7 +187,8 @@ final class MonitoringViewModel: ObservableObject {
     private func rebuildRuntimeStates() {
         let existing = runtimeStates
         runtimeStates = Dictionary(uniqueKeysWithValues: cameras.map { camera in
-            let state = existing[camera.id] ?? CameraRuntimeState(id: camera.id)
+            var state = existing[camera.id] ?? CameraRuntimeState(id: camera.id)
+            state.sourceType = camera.sourceType
             return (camera.id, state)
         })
     }
@@ -208,56 +216,104 @@ final class MonitoringViewModel: ObservableObject {
         }
     }
 
-    private func updateStatuses(for ids: [UUID], status: CaptureStatus, errorMessage: String?) {
-        for id in ids {
-            var state = runtimeStates[id] ?? CameraRuntimeState(id: id)
-            state.status = status
-            state.errorMessage = errorMessage
-            runtimeStates[id] = state
+    private func applySnapshot(_ snapshot: CameraSnapshot, now: Date) {
+        var runtimeState = runtimeStates[snapshot.camera.id] ?? CameraRuntimeState(id: snapshot.camera.id)
+        runtimeState.sourceType = snapshot.camera.sourceType
+        runtimeState.status = snapshot.state.status
+        runtimeState.errorMessage = snapshot.state.lastErrorMessage
+        runtimeState.lastCapturedAt = snapshot.frame?.capturedAt ?? snapshot.state.lastFrameAt
+        runtimeState.lastFrameSequence = snapshot.frame?.sourceFrameSequence ?? snapshot.state.lastFrameSequence
+        runtimeState.imagePixelSize = snapshot.frame?.pixelSize
+        runtimeState.configuredFPS = snapshot.state.configuredFPS
+        runtimeState.sessionModeLabel = snapshot.state.sessionModeLabel
+        runtimeState.isSessionActive = snapshot.state.isActive
+        runtimeState.usingVideoToolbox = snapshot.state.usingVideoToolbox
+        runtimeState.isUsingVideoToolboxFallback = snapshot.state.isUsingVideoToolboxFallback
+        runtimeState.restartCount = snapshot.state.restartCount
+        runtimeState.isReconnecting = snapshot.state.isReconnecting
+        runtimeState.diagnosticMessage = snapshot.state.diagnosticMessage
+        runtimeState.processIdentifier = snapshot.state.processIdentifier
+
+        if let frame = snapshot.frame {
+            runtimeState.image = NSImage(cgImage: frame.image, size: frame.pixelSize)
+            runtimeState.lastFrameAgeDescription = now.timeIntervalSince(frame.capturedAt).formattedAge
+        } else {
+            runtimeState.lastFrameAgeDescription = nil
+        }
+
+        runtimeStates[snapshot.camera.id] = runtimeState
+    }
+
+    private func analyzeNewFrames(from snapshots: [CameraSnapshot]) async -> [AnalysisResult] {
+        let faceDetectionManager = self.faceDetectionManager
+
+        return await withTaskGroup(of: AnalysisResult?.self) { group in
+            for snapshot in snapshots {
+                guard let frame = snapshot.frame else { continue }
+                guard FrameAnalysisScheduler.shouldAnalyze(
+                    cameraID: snapshot.camera.id,
+                    frameSequence: frame.sourceFrameSequence,
+                    lastAnalyzedFrameSequenceByCamera: lastAnalyzedFrameSequenceByCamera,
+                    inFlightCameraIDs: inFlightAnalysisCameraIDs
+                ) else { continue }
+
+                inFlightAnalysisCameraIDs.insert(snapshot.camera.id)
+                runtimeStates[snapshot.camera.id]?.status = .processing
+
+                group.addTask {
+                    do {
+                        let result = try await faceDetectionManager.detectFaces(in: frame.image)
+                        return AnalysisResult(
+                            cameraID: snapshot.camera.id,
+                            frameSequence: frame.sourceFrameSequence,
+                            detectionResult: result,
+                            errorMessage: nil
+                        )
+                    } catch {
+                        return AnalysisResult(
+                            cameraID: snapshot.camera.id,
+                            frameSequence: frame.sourceFrameSequence,
+                            detectionResult: nil,
+                            errorMessage: error.localizedDescription
+                        )
+                    }
+                }
+            }
+
+            var results: [AnalysisResult] = []
+            for await result in group {
+                if let result {
+                    results.append(result)
+                }
+            }
+            return results
         }
     }
 
-    private static func captureAndProcessCamera(
-        camera: CameraDefinition,
-        frameCaptureManager: FrameCaptureManager,
-        faceDetectionManager: FaceDetectionManager,
-        faceDetectionEnabled: Bool
-    ) async -> CameraCycleResult {
-        do {
-            guard let frame = try await frameCaptureManager.captureFrame(for: camera) else {
-                return CameraCycleResult(camera: camera, frame: nil, detectionResult: nil, capturedAt: nil, errorMessage: nil)
-            }
+    private func applyAnalysisResult(_ result: AnalysisResult) {
+        inFlightAnalysisCameraIDs.remove(result.cameraID)
 
-            let detectionResult: FaceDetectionResult?
-            if faceDetectionEnabled {
-                detectionResult = try await faceDetectionManager.detectFaces(in: frame.cgImage)
-            } else {
-                detectionResult = nil
-            }
-
-            return CameraCycleResult(
-                camera: camera,
-                frame: frame,
-                detectionResult: detectionResult,
-                capturedAt: Date(),
-                errorMessage: nil
-            )
-        } catch {
-            return CameraCycleResult(
-                camera: camera,
-                frame: nil,
-                detectionResult: nil,
-                capturedAt: nil,
-                errorMessage: error.localizedDescription
-            )
+        if let detectionResult = result.detectionResult {
+            runtimeStates[result.cameraID]?.detectionResult = detectionResult
+            runtimeStates[result.cameraID]?.status = .capturing
+            runtimeStates[result.cameraID]?.errorMessage = nil
+            lastAnalyzedFrameSequenceByCamera[result.cameraID] = result.frameSequence
+        } else {
+            runtimeStates[result.cameraID]?.status = .error
+            runtimeStates[result.cameraID]?.errorMessage = result.errorMessage
         }
     }
 }
 
-private struct CameraCycleResult {
+private struct CameraSnapshot {
     let camera: CameraDefinition
-    let frame: DecodedFrame?
+    let frame: CapturedFrame?
+    let state: CaptureSessionState
+}
+
+private struct AnalysisResult {
+    let cameraID: UUID
+    let frameSequence: UInt64
     let detectionResult: FaceDetectionResult?
-    let capturedAt: Date?
     let errorMessage: String?
 }
