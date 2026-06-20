@@ -60,7 +60,9 @@ final class MonitoringViewModel: ObservableObject {
     }
 
     func orderedRuntimeStates() -> [(CameraDefinition, CameraRuntimeState)] {
-        cameras.map { camera in
+        cameras
+            .filter(\.isEnabled)
+            .map { camera in
             (camera, runtimeStates[camera.id] ?? CameraRuntimeState(id: camera.id))
         }
     }
