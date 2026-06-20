@@ -15,7 +15,7 @@ actor CameraSelectionEngine {
     private var candidateSince: Date?
     private var lastSwitchAt: Date?
 
-    init(stabilityDuration: TimeInterval = 1.5, switchCooldown: TimeInterval = 3.0) {
+    init(stabilityDuration: TimeInterval = 0.8, switchCooldown: TimeInterval = 2.0) {
         self.stabilityDuration = stabilityDuration
         self.switchCooldown = switchCooldown
     }

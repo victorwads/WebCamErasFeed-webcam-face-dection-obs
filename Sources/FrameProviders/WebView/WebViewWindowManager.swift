@@ -4,6 +4,25 @@ import Foundation
 final class WebViewWindowManager {
     private var controllers: [UUID: WebViewWindowController] = [:]
 
+    func syncWindows(with configurations: [CameraDefinition]) {
+        let activeWebViewConfigurations = Dictionary(
+            uniqueKeysWithValues: configurations
+                .filter { $0.isEnabled && $0.providerType == .webView }
+                .map { ($0.id, $0) }
+        )
+
+        for (sourceID, controller) in controllers {
+            guard let configuration = activeWebViewConfigurations[sourceID] else {
+                controller.closeWindow()
+                controllers.removeValue(forKey: sourceID)
+                AppLog.webView.info("Closed WebView window for inactive source \(sourceID.uuidString, privacy: .public)")
+                continue
+            }
+
+            controller.sync(with: configuration)
+        }
+    }
+
     func ensureWindow(for configuration: CameraDefinition) throws -> WebViewWindowController {
         guard configuration.providerType == .webView else {
             throw FrameProviderError.invalidConfiguration("The selected source is not a WebView provider.")
@@ -55,7 +74,7 @@ final class WebViewWindowManager {
     }
 
     func removeWindow(for sourceID: UUID) {
-        controllers[sourceID]?.hideWindow()
+        controllers[sourceID]?.closeWindow()
         controllers.removeValue(forKey: sourceID)
     }
 }

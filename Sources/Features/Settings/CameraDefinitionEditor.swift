@@ -190,6 +190,7 @@ struct CameraDefinitionEditor: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Loading Status: \(webViewStatus.navigationStatus)")
                     Text("Window Status: \(webViewStatus.windowStatus)")
+                    Text("Focused: \(webViewStatus.isKeyWindow ? "Yes" : "Spoofed keep-alive")")
                     if let loadedURL = webViewStatus.loadedURL {
                         Text("Loaded URL: \(loadedURL)")
                     }
@@ -205,6 +206,10 @@ struct CameraDefinitionEditor: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            Text("Tip: drag the top bar inside the window to place multiple WebViews side by side. The embedded browser keeps localhost WebRTC allowed, muted and with focus keep-alive enabled.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 }

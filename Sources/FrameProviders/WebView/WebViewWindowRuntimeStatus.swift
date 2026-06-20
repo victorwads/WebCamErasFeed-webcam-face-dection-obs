@@ -7,6 +7,7 @@ struct WebViewWindowRuntimeStatus: Sendable {
     let loadedURL: String?
     let isWindowOpen: Bool
     let isVisible: Bool
+    let isKeyWindow: Bool
     let isLoading: Bool
     let navigationStatus: String
     let windowStatus: String

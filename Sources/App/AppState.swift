@@ -64,6 +64,9 @@ final class AppState: ObservableObject {
         cameraDefinitionsStore.save(cameras)
         preferencesStore.save(preferences)
         settingsViewModel.replaceState(cameras: cameras, preferences: preferences)
+        await MainActor.run {
+            webViewWindowManager.syncWindows(with: cameras)
+        }
         await monitoringViewModel.applyConfiguration(cameras: cameras, preferences: preferences)
     }
 
