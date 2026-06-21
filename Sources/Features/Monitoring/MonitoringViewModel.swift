@@ -77,8 +77,8 @@ final class MonitoringViewModel: ObservableObject {
 
     func switchToScene(for camera: CameraDefinition) {
         Task {
-            await obsClient.setCurrentProgramScene(sceneName: camera.trimmedSceneName)
-            lastRequestedOBSSceneName = camera.trimmedSceneName
+            await obsClient.setCurrentProgramScene(sceneName: camera.managedOBSSceneName)
+            lastRequestedOBSSceneName = camera.managedOBSSceneName
             lastOBSSceneSwitchAt = Date()
         }
     }
@@ -168,14 +168,14 @@ final class MonitoringViewModel: ObservableObject {
         }
 
         guard let selectedCamera = cameras.first(where: { $0.id == selectedCameraID }) else { return }
-        guard selectedCamera.isEnabled, !selectedCamera.trimmedSceneName.isEmpty else { return }
+        guard selectedCamera.isEnabled else { return }
 
-        if obsClient.currentProgramSceneName == selectedCamera.trimmedSceneName {
+        if obsClient.currentProgramSceneName == selectedCamera.managedOBSSceneName {
             return
         }
 
-        await obsClient.setCurrentProgramScene(sceneName: selectedCamera.trimmedSceneName)
-        lastRequestedOBSSceneName = selectedCamera.trimmedSceneName
+        await obsClient.setCurrentProgramScene(sceneName: selectedCamera.managedOBSSceneName)
+        lastRequestedOBSSceneName = selectedCamera.managedOBSSceneName
         lastOBSSceneSwitchAt = selection.lastSwitchAt
     }
 

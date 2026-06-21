@@ -24,7 +24,6 @@ struct CameraDefinitionEditor: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 10) {
                         DSFormField(title: "Name", text: $camera.name, prompt: "Desk Camera")
-                        DSFormField(title: "OBS Scene Name", text: $camera.sceneName, prompt: "Desk Scene")
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Provider Type")
@@ -50,6 +49,10 @@ struct CameraDefinitionEditor: View {
                         case .localCamera:
                             localCameraSettings
                         }
+
+                        Text("Managed OBS Scene: \(camera.managedOBSSceneName)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .trailing, spacing: 8) {

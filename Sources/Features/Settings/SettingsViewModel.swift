@@ -5,11 +5,13 @@ final class SettingsViewModel: ObservableObject {
     @Published var cameras: [CameraDefinition]
     @Published var preferences: AppPreferences
     @Published var lastApplyMessage: String?
+    @Published var filterDisabledCameras = false
     @Published private(set) var localCameraDevices: [LocalCameraDevice] = []
     @Published private(set) var localCameraAuthorizationStatus: LocalCameraAuthorizationStatus = .notDetermined
     @Published private(set) var webViewStatuses: [UUID: WebViewWindowRuntimeStatus] = [:]
 
-    var onApply: (@MainActor ([CameraDefinition], AppPreferences) async -> Void)?
+    var onApply: (@MainActor ([CameraDefinition], AppPreferences) async -> String)?
+    var onProvisionOBSScenes: (@MainActor ([CameraDefinition], AppPreferences) async -> String)?
     private let localCameraDeviceProvider: LocalCameraDeviceProvider
     private let webViewWindowManager: WebViewWindowManager
 
@@ -50,8 +52,16 @@ final class SettingsViewModel: ObservableObject {
     func apply() async {
         preferences.captureInterval = preferences.clampedCaptureInterval
         let sanitizedCameras = sanitizedCameraDefinitions(from: cameras)
-        await onApply?(sanitizedCameras, preferences)
-        lastApplyMessage = "Settings applied at \(Date().formatted(date: .omitted, time: .standard))"
+        let resultMessage = await onApply?(sanitizedCameras, preferences) ?? "Settings applied."
+        lastApplyMessage = "\(resultMessage) at \(Date().formatted(date: .omitted, time: .standard))"
+        replaceState(cameras: cameras, preferences: preferences)
+    }
+
+    func provisionOBSScenes() async {
+        preferences.captureInterval = preferences.clampedCaptureInterval
+        let sanitizedCameras = sanitizedCameraDefinitions(from: cameras)
+        let resultMessage = await onProvisionOBSScenes?(sanitizedCameras, preferences) ?? "OBS scenes synchronized."
+        lastApplyMessage = "\(resultMessage) at \(Date().formatted(date: .omitted, time: .standard))"
         replaceState(cameras: cameras, preferences: preferences)
     }
 
@@ -144,6 +154,12 @@ final class SettingsViewModel: ObservableObject {
     func localCameraName(for uniqueID: String?) -> String? {
         guard let uniqueID else { return nil }
         return localCameraDevices.first(where: { $0.id == uniqueID })?.localizedName
+    }
+
+    var visibleCameraIndices: [Int] {
+        cameras.indices.filter { index in
+            !filterDisabledCameras || cameras[index].isEnabled
+        }
     }
 
     private func sanitizedCameraDefinitions(from cameras: [CameraDefinition]) -> [CameraDefinition] {

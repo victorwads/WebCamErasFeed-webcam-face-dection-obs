@@ -13,7 +13,7 @@ struct CameraPreviewCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(camera.displayName)
                             .font(.headline)
-                        Text(camera.trimmedSceneName.isEmpty ? "No OBS scene assigned" : camera.trimmedSceneName)
+                        Text(camera.managedOBSSceneName)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -55,7 +55,7 @@ struct CameraPreviewCard: View {
 
                 HStack {
                     DSStatusBadge(title: runtimeState.status.rawValue.capitalized, color: badgeColor)
-                    if currentOBSSceneName == camera.trimmedSceneName, !camera.trimmedSceneName.isEmpty {
+                    if currentOBSSceneName == camera.managedOBSSceneName {
                         DSStatusBadge(title: "OBS Live", color: .blue)
                     }
                     if runtimeState.isReconnecting {
@@ -130,10 +130,8 @@ struct CameraPreviewCard: View {
                         .foregroundStyle(.red)
                 }
 
-                if !camera.trimmedSceneName.isEmpty {
-                    Button("Switch OBS to This Scene") {
-                        onSwitchScene()
-                    }
+                Button("Switch OBS to This Scene") {
+                    onSwitchScene()
                 }
 
                 if camera.providerType == .webView {

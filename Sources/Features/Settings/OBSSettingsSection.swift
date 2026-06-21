@@ -6,6 +6,7 @@ struct OBSSettingsSection: View {
     let onConnect: () -> Void
     let onDisconnect: () -> Void
     let onRefreshScenes: () -> Void
+    let onProvisionScenes: () -> Void
 
     var body: some View {
         DSCard {
@@ -64,6 +65,11 @@ struct OBSSettingsSection: View {
                         onRefreshScenes()
                     }
                     .disabled(obsClient.connectionState != .connected)
+
+                    Button("Create / Sync OBS Scenes") {
+                        onProvisionScenes()
+                    }
+                    .disabled(!preferences.obsConfiguration.isEnabled)
                 }
 
                 if !obsClient.availableScenes.isEmpty {

@@ -15,9 +15,7 @@ struct CameraDefinitionRow: View {
                 color: camera.providerType == .ffmpeg ? .blue : camera.providerType == .webView ? .indigo : .teal
             )
 
-            if !camera.trimmedSceneName.isEmpty {
-                DSStatusBadge(title: "OBS Scene Set", color: .purple)
-            }
+            DSStatusBadge(title: "OBS Managed", color: .purple)
 
             DSStatusBadge(
                 title: camera.isValidSourceConfiguration ? "Source Ready" : "Source Incomplete",

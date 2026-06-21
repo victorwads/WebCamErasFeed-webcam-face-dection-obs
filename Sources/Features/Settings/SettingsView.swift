@@ -17,13 +17,16 @@ struct SettingsView: View {
                         HStack {
                             Text("Cameras")
                                 .font(.headline)
+                            Toggle("Filter Disabled", isOn: $viewModel.filterDisabledCameras)
+                                .toggleStyle(.switch)
+                                .fixedSize()
                             Spacer()
                             Button("Add Camera") {
                                 viewModel.addCamera()
                             }
                         }
 
-                        ForEach(Array(viewModel.cameras.enumerated()), id: \.element.id) { index, _ in
+                        ForEach(viewModel.visibleCameraIndices, id: \.self) { index in
                             CameraDefinitionEditor(
                                 camera: $viewModel.cameras[index],
                                 localCameraDevices: viewModel.localCameraDevices,
@@ -71,7 +74,12 @@ struct SettingsView: View {
                     obsClient: appState.obsClient,
                     onConnect: { appState.connectOBS() },
                     onDisconnect: { appState.disconnectOBS() },
-                    onRefreshScenes: { appState.refreshOBSScenes() }
+                    onRefreshScenes: { appState.refreshOBSScenes() },
+                    onProvisionScenes: {
+                        Task {
+                            await viewModel.provisionOBSScenes()
+                        }
+                    }
                 )
 
                 HStack {

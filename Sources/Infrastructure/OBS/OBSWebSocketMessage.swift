@@ -79,7 +79,7 @@ struct OBSEventData: Decodable {
     let eventData: [String: JSONValue]?
 }
 
-enum JSONValue: Codable, Equatable {
+enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -134,6 +134,33 @@ enum JSONValue: Codable, Equatable {
 
     var stringValue: String? {
         if case .string(let value) = self { return value }
+        return nil
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .int(let value):
+            return value
+        case .double(let value):
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+
+    var doubleValue: Double? {
+        switch self {
+        case .int(let value):
+            return Double(value)
+        case .double(let value):
+            return value
+        default:
+            return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        if case .bool(let value) = self { return value }
         return nil
     }
 }

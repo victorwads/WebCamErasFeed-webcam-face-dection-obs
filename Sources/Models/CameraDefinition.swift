@@ -100,6 +100,14 @@ struct CameraDefinition: Identifiable, Codable, Hashable, Sendable {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unnamed Camera" : name
     }
 
+    var managedOBSSceneName: String {
+        OBSManagedNames.sceneName(for: self)
+    }
+
+    var managedOBSInputName: String {
+        OBSManagedNames.inputName(for: self)
+    }
+
     var trimmedSceneName: String {
         sceneName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -115,7 +123,6 @@ struct CameraDefinition: Identifiable, Codable, Hashable, Sendable {
 
     var isEmpty: Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        sceneName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         streamURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (localDeviceUniqueID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }

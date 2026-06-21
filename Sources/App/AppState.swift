@@ -10,6 +10,7 @@ final class AppState: ObservableObject {
     private let cameraDefinitionsStore: CameraDefinitionsStore
     private let localCameraDeviceProvider: LocalCameraDeviceProvider
     @MainActor private let webViewWindowManager: WebViewWindowManager
+    private let localCameraSceneProvisioner: OBSLocalCameraSceneProvisioner
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
@@ -25,12 +26,14 @@ final class AppState: ObservableObject {
                 webViewWindowManager: webViewWindowManager
             )
         )
+        let localCameraSceneProvisioner = OBSLocalCameraSceneProvisioner(client: obsClient)
 
         self.preferencesStore = preferencesStore
         self.cameraDefinitionsStore = cameraDefinitionsStore
         self.obsClient = obsClient
         self.localCameraDeviceProvider = localCameraDeviceProvider
         self.webViewWindowManager = webViewWindowManager
+        self.localCameraSceneProvisioner = localCameraSceneProvisioner
 
         let storedPreferences = preferencesStore.load()
         let storedCameras = cameraDefinitionsStore.load()
@@ -50,7 +53,10 @@ final class AppState: ObservableObject {
         self.monitoringViewModel = monitoringViewModel
 
         settingsViewModel.onApply = { [weak self] cameras, preferences in
-            await self?.apply(cameras: cameras, preferences: preferences)
+            await self?.apply(cameras: cameras, preferences: preferences) ?? "Settings applied."
+        }
+        settingsViewModel.onProvisionOBSScenes = { [weak self] cameras, preferences in
+            await self?.provisionOBSScenes(cameras: cameras, preferences: preferences) ?? "OBS scenes synchronized."
         }
 
         if !ProcessInfo.processInfo.isRunningTests {
@@ -60,7 +66,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func apply(cameras: [CameraDefinition], preferences: AppPreferences) async {
+    func apply(cameras: [CameraDefinition], preferences: AppPreferences) async -> String {
         cameraDefinitionsStore.save(cameras)
         preferencesStore.save(preferences)
         settingsViewModel.replaceState(cameras: cameras, preferences: preferences)
@@ -68,12 +74,46 @@ final class AppState: ObservableObject {
             webViewWindowManager.syncWindows(with: cameras)
         }
         await monitoringViewModel.applyConfiguration(cameras: cameras, preferences: preferences)
+
+        guard preferences.obsConfiguration.isEnabled else {
+            return "Settings applied. OBS integration is disabled."
+        }
+
+        let provisioningReport = await localCameraSceneProvisioner.synchronize(sources: cameras)
+        if provisioningReport.errors.isEmpty {
+            return "Settings applied. \(provisioningReport.summaryText)"
+        }
+
+        let firstError = provisioningReport.errors.first?.message ?? "Unknown OBS provisioning error."
+        return "Settings applied with OBS provisioning issues. \(provisioningReport.summaryText). First error: \(firstError)"
     }
 
     func connectOBS() {
         Task {
             await obsClient.connect(using: settingsViewModel.preferences.obsConfiguration)
         }
+    }
+
+    func provisionOBSScenes(cameras: [CameraDefinition], preferences: AppPreferences) async -> String {
+        guard preferences.obsConfiguration.isEnabled else {
+            return "OBS integration is disabled."
+        }
+
+        if obsClient.connectionState != .connected {
+            await obsClient.connect(using: preferences.obsConfiguration)
+        }
+
+        guard obsClient.connectionState == .connected else {
+            return obsClient.lastErrorMessage ?? "OBS is not connected."
+        }
+
+        let provisioningReport = await localCameraSceneProvisioner.synchronize(sources: cameras)
+        if provisioningReport.errors.isEmpty {
+            return "OBS scenes synchronized. \(provisioningReport.summaryText)"
+        }
+
+        let firstError = provisioningReport.errors.first?.message ?? "Unknown OBS provisioning error."
+        return "OBS scenes synchronized with issues. \(provisioningReport.summaryText). First error: \(firstError)"
     }
 
     func disconnectOBS() {

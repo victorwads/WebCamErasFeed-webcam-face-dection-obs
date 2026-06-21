@@ -78,21 +78,9 @@ final class OBSClient: ObservableObject {
         guard connectionState == .connected else { return }
 
         do {
-            let response = try await sendRequest(type: "GetSceneList", data: Optional<EmptyOBSRequestData>.none)
-            let scenes = response.responseData?["scenes"]?.arrayValue ?? []
-            let summaries = scenes.compactMap { value -> OBSSceneSummary? in
-                guard
-                    let object = value.objectValue,
-                    let name = object["sceneName"]?.stringValue
-                else {
-                    return nil
-                }
-
-                return OBSSceneSummary(name: name)
-            }
-
-            availableScenes = summaries
-            currentProgramSceneName = response.responseData?["currentProgramSceneName"]?.stringValue
+            let response = try await getSceneListResponse()
+            availableScenes = response.scenes
+            currentProgramSceneName = response.currentProgramSceneName
         } catch {
             lastErrorMessage = error.localizedDescription
         }
@@ -113,6 +101,222 @@ final class OBSClient: ObservableObject {
         } catch {
             lastErrorMessage = error.localizedDescription
         }
+    }
+
+    func getSceneList() async throws -> [OBSSceneSummary] {
+        try await getSceneListResponse().scenes
+    }
+
+    func createScene(named sceneName: String) async throws {
+        _ = try await sendRequest(
+            type: "CreateScene",
+            data: CreateSceneRequest(sceneName: sceneName)
+        )
+    }
+
+    func getInputList(inputKind: String?) async throws -> [OBSInputSummary] {
+        let response = try await sendRequest(
+            type: "GetInputList",
+            data: GetInputListRequest(inputKind: inputKind)
+        )
+
+        let values = response.responseData?["inputs"]?.arrayValue ?? []
+        return values.compactMap { value in
+            guard let object = value.objectValue,
+                  let inputName = object["inputName"]?.stringValue,
+                  let inputKind = object["inputKind"]?.stringValue
+            else {
+                return nil
+            }
+
+            return OBSInputSummary(
+                id: object["inputUuid"]?.stringValue ?? inputName,
+                inputName: inputName,
+                inputKind: inputKind,
+                unversionedInputKind: object["unversionedInputKind"]?.stringValue
+            )
+        }
+    }
+
+    func getInputKindList(unversioned: Bool) async throws -> [String] {
+        let response = try await sendRequest(
+            type: "GetInputKindList",
+            data: GetInputKindListRequest(unversioned: unversioned)
+        )
+
+        return response.responseData?["inputKinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    func getInputDefaultSettings(inputKind: String) async throws -> [String: JSONValue] {
+        let response = try await sendRequest(
+            type: "GetInputDefaultSettings",
+            data: GetInputDefaultSettingsRequest(inputKind: inputKind)
+        )
+
+        return response.responseData?["defaultInputSettings"]?.objectValue ?? [:]
+    }
+
+    func getInputSettings(inputName: String) async throws -> (inputKind: String, inputSettings: [String: JSONValue]) {
+        let response = try await sendRequest(
+            type: "GetInputSettings",
+            data: GetInputSettingsRequest(inputName: inputName)
+        )
+
+        guard let inputKind = response.responseData?["inputKind"]?.stringValue else {
+            throw OBSClientError.requestFailed("OBS did not return the input kind for \(inputName).")
+        }
+
+        return (inputKind, response.responseData?["inputSettings"]?.objectValue ?? [:])
+    }
+
+    func getInputPropertiesListPropertyItems(
+        inputName: String,
+        propertyName: String
+    ) async throws -> [OBSPropertyListItem] {
+        let response = try await sendRequest(
+            type: "GetInputPropertiesListPropertyItems",
+            data: GetInputPropertiesListPropertyItemsRequest(
+                inputName: inputName,
+                propertyName: propertyName
+            )
+        )
+
+        let values = response.responseData?["propertyItems"]?.arrayValue ?? []
+        return values.compactMap { value in
+            guard let object = value.objectValue else { return nil }
+            return OBSPropertyListItem(
+                itemName: object["itemName"]?.stringValue ?? "",
+                itemValue: object["itemValue"]?.stringValue ?? "",
+                itemEnabled: object["itemEnabled"]?.boolValue ?? true
+            )
+        }
+    }
+
+    func createInput(
+        sceneName: String,
+        inputName: String,
+        inputKind: String,
+        inputSettings: [String: JSONValue],
+        sceneItemEnabled: Bool
+    ) async throws {
+        _ = try await sendRequest(
+            type: "CreateInput",
+            data: CreateInputRequest(
+                sceneName: sceneName,
+                inputName: inputName,
+                inputKind: inputKind,
+                inputSettings: inputSettings,
+                sceneItemEnabled: sceneItemEnabled
+            )
+        )
+    }
+
+    func createSceneItem(
+        sceneName: String,
+        sourceName: String,
+        sceneItemEnabled: Bool
+    ) async throws -> Int {
+        let response = try await sendRequest(
+            type: "CreateSceneItem",
+            data: CreateSceneItemRequest(
+                sceneName: sceneName,
+                sourceName: sourceName,
+                sceneItemEnabled: sceneItemEnabled
+            )
+        )
+
+        guard let sceneItemId = response.responseData?["sceneItemId"]?.intValue else {
+            throw OBSClientError.requestFailed("OBS did not return a scene item id when adding \(sourceName) to \(sceneName).")
+        }
+
+        return sceneItemId
+    }
+
+    func setInputSettings(
+        inputName: String,
+        inputSettings: [String: JSONValue],
+        overlay: Bool
+    ) async throws {
+        _ = try await sendRequest(
+            type: "SetInputSettings",
+            data: SetInputSettingsRequest(
+                inputName: inputName,
+                inputSettings: inputSettings,
+                overlay: overlay
+            )
+        )
+    }
+
+    func getSceneItemId(sceneName: String, sourceName: String) async throws -> Int {
+        let response = try await sendRequest(
+            type: "GetSceneItemId",
+            data: GetSceneItemIdRequest(sceneName: sceneName, sourceName: sourceName)
+        )
+
+        guard let sceneItemId = response.responseData?["sceneItemId"]?.intValue else {
+            throw OBSClientError.requestFailed("OBS did not return a scene item id for \(sourceName).")
+        }
+
+        return sceneItemId
+    }
+
+    func getSceneItemTransform(sceneName: String, sceneItemId: Int) async throws -> OBSSceneItemTransformSettings {
+        let response = try await sendRequest(
+            type: "GetSceneItemTransform",
+            data: GetSceneItemTransformRequest(sceneName: sceneName, sceneItemId: sceneItemId)
+        )
+
+        guard
+            let object = response.responseData?["sceneItemTransform"]?.objectValue,
+            let transform = OBSSceneItemTransformSettings.from(responseObject: object)
+        else {
+            throw OBSClientError.requestFailed("OBS did not return a valid scene item transform.")
+        }
+
+        return transform
+    }
+
+    func setSceneItemTransform(
+        sceneName: String,
+        sceneItemId: Int,
+        transform: OBSSceneItemTransformSettings
+    ) async throws {
+        _ = try await sendRequest(
+            type: "SetSceneItemTransform",
+            data: SetSceneItemTransformRequest(
+                sceneName: sceneName,
+                sceneItemId: sceneItemId,
+                sceneItemTransform: transform.requestData
+            )
+        )
+    }
+
+    func setSceneItemLocked(
+        sceneName: String,
+        sceneItemId: Int,
+        locked: Bool
+    ) async throws {
+        _ = try await sendRequest(
+            type: "SetSceneItemLocked",
+            data: SetSceneItemLockedRequest(
+                sceneName: sceneName,
+                sceneItemId: sceneItemId,
+                sceneItemLocked: locked
+            )
+        )
+    }
+
+    func getVideoSettings() async throws -> OBSVideoSettings {
+        let response = try await sendRequest(type: "GetVideoSettings", data: Optional<EmptyOBSRequestData>.none)
+
+        guard
+            let baseWidth = response.responseData?["baseWidth"]?.intValue,
+            let baseHeight = response.responseData?["baseHeight"]?.intValue
+        else {
+            throw OBSClientError.requestFailed("OBS did not return canvas dimensions.")
+        }
+
+        return OBSVideoSettings(baseWidth: baseWidth, baseHeight: baseHeight)
     }
 
     private func receiveLoop() async {
@@ -140,6 +344,23 @@ final class OBSClient: ObservableObject {
             connectionState = .error
             resumeAllPendingRequests(with: error)
         }
+    }
+
+    private func getSceneListResponse() async throws -> (scenes: [OBSSceneSummary], currentProgramSceneName: String?) {
+        let response = try await sendRequest(type: "GetSceneList", data: Optional<EmptyOBSRequestData>.none)
+        let scenes = response.responseData?["scenes"]?.arrayValue ?? []
+        let summaries = scenes.compactMap { value -> OBSSceneSummary? in
+            guard
+                let object = value.objectValue,
+                let name = object["sceneName"]?.stringValue
+            else {
+                return nil
+            }
+
+            return OBSSceneSummary(name: name)
+        }
+
+        return (summaries, response.responseData?["currentProgramSceneName"]?.stringValue)
     }
 
     private func handleMessage(data: Data) async throws {
@@ -289,6 +510,73 @@ private struct SetCurrentProgramSceneData: Encodable {
     let sceneName: String
 }
 
+private struct CreateSceneRequest: Encodable {
+    let sceneName: String
+}
+
+private struct GetInputListRequest: Encodable {
+    let inputKind: String?
+}
+
+private struct GetInputKindListRequest: Encodable {
+    let unversioned: Bool
+}
+
+private struct GetInputDefaultSettingsRequest: Encodable {
+    let inputKind: String
+}
+
+private struct GetInputSettingsRequest: Encodable {
+    let inputName: String
+}
+
+private struct GetInputPropertiesListPropertyItemsRequest: Encodable {
+    let inputName: String
+    let propertyName: String
+}
+
+private struct CreateInputRequest: Encodable {
+    let sceneName: String
+    let inputName: String
+    let inputKind: String
+    let inputSettings: [String: JSONValue]
+    let sceneItemEnabled: Bool
+}
+
+private struct SetInputSettingsRequest: Encodable {
+    let inputName: String
+    let inputSettings: [String: JSONValue]
+    let overlay: Bool
+}
+
+private struct CreateSceneItemRequest: Encodable {
+    let sceneName: String
+    let sourceName: String
+    let sceneItemEnabled: Bool
+}
+
+private struct GetSceneItemIdRequest: Encodable {
+    let sceneName: String
+    let sourceName: String
+}
+
+private struct GetSceneItemTransformRequest: Encodable {
+    let sceneName: String
+    let sceneItemId: Int
+}
+
+private struct SetSceneItemTransformRequest: Encodable {
+    let sceneName: String
+    let sceneItemId: Int
+    let sceneItemTransform: [String: JSONValue]
+}
+
+private struct SetSceneItemLockedRequest: Encodable {
+    let sceneName: String
+    let sceneItemId: Int
+    let sceneItemLocked: Bool
+}
+
 private enum OBSClientError: LocalizedError {
     case disconnected
     case encodingFailed
@@ -323,3 +611,6 @@ private extension JSONValue {
         return nil
     }
 }
+
+@MainActor
+extension OBSClient: OBSProvisioningClient {}

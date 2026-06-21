@@ -16,5 +16,7 @@ final class CameraDefinitionMigrationTests: XCTestCase {
         let camera = try JSONDecoder().decode(CameraDefinition.self, from: Data(json.utf8))
         XCTAssertEqual(camera.providerType, .ffmpeg)
         XCTAssertNil(camera.localDeviceUniqueID)
+        XCTAssertEqual(camera.sceneName, "Legacy Scene")
+        XCTAssertEqual(camera.managedOBSSceneName, "[CameraDirector] Legacy")
     }
 }
