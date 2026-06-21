@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
     private let localCameraDeviceProvider: LocalCameraDeviceProvider
     @MainActor private let webViewWindowManager: WebViewWindowManager
     private let localCameraSceneProvisioner: OBSLocalCameraSceneProvisioner
+    private let rtspSceneProvisioner: OBSRTSPSceneProvisioner
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
@@ -27,6 +28,7 @@ final class AppState: ObservableObject {
             )
         )
         let localCameraSceneProvisioner = OBSLocalCameraSceneProvisioner(client: obsClient)
+        let rtspSceneProvisioner = OBSRTSPSceneProvisioner(client: obsClient)
 
         self.preferencesStore = preferencesStore
         self.cameraDefinitionsStore = cameraDefinitionsStore
@@ -34,6 +36,7 @@ final class AppState: ObservableObject {
         self.localCameraDeviceProvider = localCameraDeviceProvider
         self.webViewWindowManager = webViewWindowManager
         self.localCameraSceneProvisioner = localCameraSceneProvisioner
+        self.rtspSceneProvisioner = rtspSceneProvisioner
 
         let storedPreferences = preferencesStore.load()
         let storedCameras = cameraDefinitionsStore.load()
@@ -79,7 +82,7 @@ final class AppState: ObservableObject {
             return "Settings applied. OBS integration is disabled."
         }
 
-        let provisioningReport = await localCameraSceneProvisioner.synchronize(sources: cameras)
+        let provisioningReport = await synchronizeOBSScenes(cameras: cameras)
         if provisioningReport.errors.isEmpty {
             return "Settings applied. \(provisioningReport.summaryText)"
         }
@@ -107,7 +110,7 @@ final class AppState: ObservableObject {
             return obsClient.lastErrorMessage ?? "OBS is not connected."
         }
 
-        let provisioningReport = await localCameraSceneProvisioner.synchronize(sources: cameras)
+        let provisioningReport = await synchronizeOBSScenes(cameras: cameras)
         if provisioningReport.errors.isEmpty {
             return "OBS scenes synchronized. \(provisioningReport.summaryText)"
         }
@@ -124,6 +127,12 @@ final class AppState: ObservableObject {
         Task {
             await obsClient.refreshSceneList()
         }
+    }
+
+    private func synchronizeOBSScenes(cameras: [CameraDefinition]) async -> OBSProvisioningReport {
+        let localReport = await localCameraSceneProvisioner.synchronize(sources: cameras)
+        let rtspReport = await rtspSceneProvisioner.synchronize(sources: cameras)
+        return localReport.merged(with: rtspReport)
     }
 }
 

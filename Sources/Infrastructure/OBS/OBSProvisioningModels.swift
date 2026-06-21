@@ -84,21 +84,21 @@ struct OBSSceneItemTransformSettings: Sendable, Equatable {
     }
 }
 
-struct OBSLocalCameraProvisioningError: Identifiable, Error, Sendable, Equatable {
+struct OBSProvisioningError: Identifiable, Error, Sendable, Equatable {
     let id = UUID()
     let sourceID: UUID
     let sourceName: String
     let message: String
 }
 
-struct OBSLocalCameraProvisioningReport: Sendable, Equatable {
+struct OBSProvisioningReport: Sendable, Equatable {
     let createdScenes: [String]
     let createdInputs: [String]
     let updatedInputs: [String]
     let unchangedInputs: [String]
-    let errors: [OBSLocalCameraProvisioningError]
+    let errors: [OBSProvisioningError]
 
-    static let empty = OBSLocalCameraProvisioningReport(
+    static let empty = OBSProvisioningReport(
         createdScenes: [],
         createdInputs: [],
         updatedInputs: [],
@@ -123,7 +123,17 @@ struct OBSLocalCameraProvisioningReport: Sendable, Equatable {
         if !errors.isEmpty {
             parts.append("Errors: \(errors.count)")
         }
-        return parts.isEmpty ? "No OBS local camera changes were required." : parts.joined(separator: " | ")
+        return parts.isEmpty ? "No OBS managed source changes were required." : parts.joined(separator: " | ")
+    }
+
+    func merged(with other: OBSProvisioningReport) -> OBSProvisioningReport {
+        OBSProvisioningReport(
+            createdScenes: createdScenes + other.createdScenes,
+            createdInputs: createdInputs + other.createdInputs,
+            updatedInputs: updatedInputs + other.updatedInputs,
+            unchangedInputs: unchangedInputs + other.unchangedInputs,
+            errors: errors + other.errors
+        )
     }
 }
 

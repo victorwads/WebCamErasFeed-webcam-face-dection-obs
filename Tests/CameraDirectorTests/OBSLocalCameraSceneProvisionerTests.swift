@@ -211,6 +211,151 @@ final class OBSLocalCameraSceneProvisionerTests: XCTestCase {
         XCTAssertTrue(client.createdInputs.isEmpty)
     }
 
+    func testExistingRTSPInputIsNotDuplicated() async {
+        let source = makeRTSPCamera(name: "Kitchen", streamURL: "rtsp://127.0.0.1:8554/camera_kitchen")
+        let inputName = source.managedOBSInputName
+        let sceneName = source.managedOBSSceneName
+        let client = MockOBSProvisioningClient(
+            scenes: [sceneName],
+            inputKinds: ["ffmpeg_source"],
+            defaultSettingsByKind: ["ffmpeg_source": [:]],
+            inputs: [
+                "Example RTSP": MockOBSProvisioningClient.InputState(
+                    kind: "ffmpeg_source",
+                    settings: [
+                        "buffering_mb": .int(0),
+                        "clear_on_media_end": .bool(false),
+                        "close_when_inactive": .bool(false),
+                        "ffmpeg_options": .string("rtsp_transport=tcp"),
+                        "hw_decode": .bool(false),
+                        "input": .string("rtsp://localhost:8554/example"),
+                        "is_local_file": .bool(false),
+                        "reconnect_delay_sec": .int(1),
+                        "restart_on_activate": .bool(false)
+                    ]
+                ),
+                inputName: MockOBSProvisioningClient.InputState(
+                    kind: "ffmpeg_source",
+                    settings: [
+                        "buffering_mb": .int(0),
+                        "clear_on_media_end": .bool(false),
+                        "close_when_inactive": .bool(false),
+                        "ffmpeg_options": .string("rtsp_transport=tcp"),
+                        "hw_decode": .bool(false),
+                        "input": .string("rtsp://127.0.0.1:8554/camera_kitchen"),
+                        "is_local_file": .bool(false),
+                        "reconnect_delay_sec": .int(1),
+                        "restart_on_activate": .bool(false)
+                    ]
+                )
+            ],
+            sceneItems: [sceneName: [inputName: 44]]
+        )
+        let provisioner = OBSRTSPSceneProvisioner(client: client)
+
+        let report = await provisioner.synchronize(sources: [source])
+
+        XCTAssertTrue(report.createdInputs.isEmpty)
+        XCTAssertEqual(report.unchangedInputs, [inputName])
+    }
+
+    func testRTSPInputUsesExampleTemplateAndCurrentURL() async {
+        let source = makeRTSPCamera(name: "Kitchen", streamURL: "rtsp://127.0.0.1:8554/camera_kitchen")
+        let client = MockOBSProvisioningClient(
+            inputKinds: ["ffmpeg_source"],
+            defaultSettingsByKind: ["ffmpeg_source": [:]],
+            inputs: [
+                "Example RTSP": MockOBSProvisioningClient.InputState(
+                    kind: "ffmpeg_source",
+                    settings: [
+                        "buffering_mb": .int(0),
+                        "clear_on_media_end": .bool(false),
+                        "close_when_inactive": .bool(false),
+                        "ffmpeg_options": .string("rtsp_transport=tcp"),
+                        "hw_decode": .bool(false),
+                        "input": .string("rtsp://localhost:8554/example"),
+                        "is_local_file": .bool(false),
+                        "reconnect_delay_sec": .int(1),
+                        "restart_on_activate": .bool(false)
+                    ]
+                )
+            ]
+        )
+        let provisioner = OBSRTSPSceneProvisioner(client: client)
+
+        let report = await provisioner.synchronize(sources: [source])
+
+        XCTAssertTrue(report.errors.isEmpty)
+        XCTAssertEqual(report.createdInputs, [source.managedOBSInputName])
+        XCTAssertEqual(client.createdInputs.first?.inputKind, "ffmpeg_source")
+        XCTAssertEqual(client.createdInputs.first?.inputSettings["input"], .string("rtsp://127.0.0.1:8554/camera_kitchen"))
+        XCTAssertEqual(client.createdInputs.first?.inputSettings["is_local_file"], .bool(false))
+        XCTAssertEqual(client.createdInputs.first?.inputSettings["ffmpeg_options"], .string("rtsp_transport=tcp"))
+    }
+
+    func testIncorrectExistingRTSPInputIsUpdated() async {
+        let source = makeRTSPCamera(name: "Kitchen", streamURL: "rtsp://127.0.0.1:8554/camera_kitchen")
+        let inputName = source.managedOBSInputName
+        let sceneName = source.managedOBSSceneName
+        let client = MockOBSProvisioningClient(
+            scenes: [sceneName],
+            inputKinds: ["ffmpeg_source"],
+            defaultSettingsByKind: ["ffmpeg_source": [:]],
+            inputs: [
+                "Example RTSP": MockOBSProvisioningClient.InputState(
+                    kind: "ffmpeg_source",
+                    settings: [
+                        "buffering_mb": .int(0),
+                        "clear_on_media_end": .bool(false),
+                        "close_when_inactive": .bool(false),
+                        "ffmpeg_options": .string("rtsp_transport=tcp"),
+                        "hw_decode": .bool(false),
+                        "input": .string("rtsp://localhost:8554/example"),
+                        "is_local_file": .bool(false),
+                        "reconnect_delay_sec": .int(1),
+                        "restart_on_activate": .bool(false)
+                    ]
+                ),
+                inputName: MockOBSProvisioningClient.InputState(
+                    kind: "ffmpeg_source",
+                    settings: [
+                        "buffering_mb": .int(0),
+                        "clear_on_media_end": .bool(false),
+                        "close_when_inactive": .bool(false),
+                        "ffmpeg_options": .string("rtsp_transport=tcp"),
+                        "hw_decode": .bool(false),
+                        "input": .string("rtsp://127.0.0.1:8554/wrong"),
+                        "is_local_file": .bool(false),
+                        "reconnect_delay_sec": .int(1),
+                        "restart_on_activate": .bool(false)
+                    ]
+                )
+            ],
+            sceneItems: [sceneName: [inputName: 45]]
+        )
+        let provisioner = OBSRTSPSceneProvisioner(client: client)
+
+        let report = await provisioner.synchronize(sources: [source])
+
+        XCTAssertEqual(report.updatedInputs, [inputName])
+        XCTAssertEqual(client.inputs[inputName]?.settings["input"], .string("rtsp://127.0.0.1:8554/camera_kitchen"))
+    }
+
+    func testInvalidRTSPSourceIsIgnoredByRTSPProvisioner() async {
+        let invalid = CameraDefinition(name: "Bad RTSP", providerType: .ffmpeg, streamURL: "http://127.0.0.1/not-rtsp", isEnabled: true)
+        let client = MockOBSProvisioningClient(
+            inputKinds: ["ffmpeg_source"],
+            defaultSettingsByKind: ["ffmpeg_source": [:]]
+        )
+        let provisioner = OBSRTSPSceneProvisioner(client: client)
+
+        let report = await provisioner.synchronize(sources: [invalid])
+
+        XCTAssertEqual(report, .empty)
+        XCTAssertTrue(client.createdSceneNames.isEmpty)
+        XCTAssertTrue(client.createdInputs.isEmpty)
+    }
+
     private func makeLocalCamera(name: String, deviceID: String) -> CameraDefinition {
         CameraDefinition(
             id: UUID(),
@@ -219,6 +364,17 @@ final class OBSLocalCameraSceneProvisionerTests: XCTestCase {
             providerType: .localCamera,
             streamURL: "",
             localDeviceUniqueID: deviceID,
+            isEnabled: true
+        )
+    }
+
+    private func makeRTSPCamera(name: String, streamURL: String) -> CameraDefinition {
+        CameraDefinition(
+            id: UUID(),
+            name: name,
+            sceneName: "",
+            providerType: .ffmpeg,
+            streamURL: streamURL,
             isEnabled: true
         )
     }

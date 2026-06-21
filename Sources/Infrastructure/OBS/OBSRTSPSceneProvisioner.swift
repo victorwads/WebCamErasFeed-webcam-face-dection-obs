@@ -1,16 +1,18 @@
 import Foundation
 
-actor OBSLocalCameraSceneProvisioner {
+actor OBSRTSPSceneProvisioner {
     private weak var client: (any OBSProvisioningClient)?
-    private let inputResolver: OBSLocalCameraInputResolver
+    private let inputResolver: OBSRTSPInputResolver
 
     init(client: any OBSProvisioningClient) {
         self.client = client
-        self.inputResolver = OBSLocalCameraInputResolver(client: client)
+        self.inputResolver = OBSRTSPInputResolver(client: client)
     }
 
     func synchronize(sources: [CameraDefinition]) async -> OBSProvisioningReport {
-        let managedSources = sources.filter { $0.isEnabled && $0.providerType == .localCamera }
+        let managedSources = sources.filter {
+            $0.isEnabled && $0.providerType == .ffmpeg && $0.hasValidRTSPURL
+        }
         guard !managedSources.isEmpty else { return .empty }
 
         guard let client else {
@@ -74,11 +76,9 @@ actor OBSLocalCameraSceneProvisioner {
                         createdScenes.append(sceneName)
                     }
 
-                    let desiredInputSettings = try await resolveInputSettings(
+                    let desiredInputSettings = desiredSettings(
                         for: source,
-                        resolvedInput: resolvedInput,
-                        existingInputs: inputSummariesByName.values.sorted(by: { $0.inputName < $1.inputName }),
-                        client: client
+                        template: resolvedInput.templateSettings
                     )
 
                     if inputSummariesByName[inputName] == nil {
@@ -169,6 +169,16 @@ actor OBSLocalCameraSceneProvisioner {
         }
     }
 
+    private func desiredSettings(
+        for source: CameraDefinition,
+        template: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        var settings = template
+        settings["input"] = .string(source.trimmedStreamURL)
+        settings["is_local_file"] = .bool(false)
+        return settings
+    }
+
     private func sceneContainsInput(
         sceneName: String,
         inputName: String,
@@ -179,119 +189,6 @@ actor OBSLocalCameraSceneProvisioner {
             return true
         } catch {
             return false
-        }
-    }
-
-    private func resolveInputSettings(
-        for source: CameraDefinition,
-        resolvedInput: OBSResolvedCameraInput,
-        existingInputs: [OBSInputSummary],
-        client: any OBSProvisioningClient
-    ) async throws -> [String: JSONValue] {
-        guard let uniqueID = source.trimmedLocalDeviceUniqueID else {
-            throw ProvisionerError.invalidCameraConfiguration("No local camera identifier was selected.")
-        }
-
-        let candidateKeys = [
-            "device",
-            "uid",
-            "device_id",
-            "camera_id",
-            "video_device_id",
-            "capture_device",
-            "unique_id"
-        ]
-
-        let existingSettings: [(String, [String: JSONValue])] = try await existingInputs
-            .filter { summary in
-                summary.inputKind == resolvedInput.inputKind || summary.unversionedInputKind == resolvedInput.inputKind
-            }
-            .asyncCompactMap { input in
-                let result = try await client.getInputSettings(inputName: input.inputName)
-                return (input.inputName, result.inputSettings)
-            }
-
-        for existingInput in existingInputs where existingInput.inputKind == resolvedInput.inputKind || existingInput.unversionedInputKind == resolvedInput.inputKind {
-            for candidateKey in candidateKeys {
-                if let items = try? await client.getInputPropertiesListPropertyItems(
-                    inputName: existingInput.inputName,
-                    propertyName: candidateKey
-                ), items.contains(where: { $0.itemValue == uniqueID }) {
-                    return [candidateKey: .string(uniqueID)]
-                }
-            }
-        }
-
-        if let matchedKey = candidateKeys.first(where: { key in
-            existingSettings.contains(where: { $0.1[key]?.stringValue == uniqueID })
-        }) {
-            return [matchedKey: .string(uniqueID)]
-        }
-
-        if resolvedInput.inputKind == "av_capture_input_v2" {
-            return ["device": .string(uniqueID)]
-        }
-
-        if let defaultKey = candidateKeys.first(where: { resolvedInput.defaultSettings[$0] != nil }) {
-            return [defaultKey: .string(uniqueID)]
-        }
-
-        if let existingKey = candidateKeys.first(where: { key in
-            existingSettings.contains(where: { $0.1[key] != nil })
-        }) {
-            return [existingKey: .string(uniqueID)]
-        }
-
-        let availableDefaultKeys = resolvedInput.defaultSettings.keys.sorted()
-        let existingDiagnostic = existingSettings
-            .map { name, settings in "\(name): \(settings)" }
-            .joined(separator: " | ")
-
-        throw ProvisionerError.deviceFieldResolutionFailed(
-            inputKind: resolvedInput.inputKind,
-            defaultSettings: availableDefaultKeys.joined(separator: ", "),
-            existingSettings: existingDiagnostic,
-            requestedDeviceIdentifier: uniqueID
-        )
-    }
-}
-
-private extension Array {
-    func asyncCompactMap<T>(
-        _ transform: (Element) async throws -> T?
-    ) async throws -> [T] {
-        var results: [T] = []
-        for element in self {
-            if let value = try await transform(element) {
-                results.append(value)
-            }
-        }
-        return results
-    }
-}
-
-extension OBSLocalCameraSceneProvisioner {
-    enum ProvisionerError: LocalizedError, Equatable {
-        case invalidCameraConfiguration(String)
-        case deviceFieldResolutionFailed(
-            inputKind: String,
-            defaultSettings: String,
-            existingSettings: String,
-            requestedDeviceIdentifier: String
-        )
-
-        var errorDescription: String? {
-            switch self {
-            case .invalidCameraConfiguration(let message):
-                return message
-            case .deviceFieldResolutionFailed(let inputKind, let defaultSettings, let existingSettings, let requestedDeviceIdentifier):
-                return """
-                Could not determine the OBS device settings field for local camera provisioning. \
-                Input kind: \(inputKind). Default settings keys: \(defaultSettings). \
-                Existing input settings: \(existingSettings.isEmpty ? "none" : existingSettings). \
-                Requested device identifier: \(requestedDeviceIdentifier)
-                """
-            }
         }
     }
 }
